@@ -1,0 +1,12 @@
+[project]
+name = "code-analysis"
+version = "0.1.0"
+description = "CodeWalk Agent Code Analysis Engine: syntax checking, linting, static analysis"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.0",
+    "pyflakes>=3.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
