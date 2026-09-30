@@ -1,0 +1,25 @@
+{
+  "name": "codewalk-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Task runner for the CodeWalk Agent monorepo (frontend: Next.js, backend: FastAPI).",
+  "scripts": {
+    "setup": "npm --prefix frontend install && uv --directory backend sync",
+    "dev": "node scripts/dev.mjs",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "uv --directory backend run python -m app",
+    "build:frontend": "npm --prefix frontend run build",
+    "test": "npm run test:backend && npm run test:frontend",
+    "test:backend": "uv --directory backend run pytest",
+    "test:frontend": "npm --prefix frontend test",
+    "test:integration": "uv --directory backend run pytest ../tests/integration -v",
+    "lint": "uv --directory backend run ruff check app tests && npm --prefix frontend run lint",
+    "format": "uv --directory backend run ruff format app tests && uv --directory backend run ruff check --fix app tests && npm --prefix frontend run format",
+    "format:check": "uv --directory backend run ruff format --check app tests && npm --prefix frontend run format:check",
+    "typecheck": "uv --directory backend run mypy && npm --prefix frontend run typecheck",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test"
+  },
+  "engines": {
+    "node": ">=20.9"
+  }
+}
