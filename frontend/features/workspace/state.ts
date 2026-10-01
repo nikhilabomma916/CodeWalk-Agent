@@ -84,6 +84,13 @@ export interface RevealRequest {
   nonce: number;
 }
 
+/** Replace a file's editor content (e.g. an applied AI fix); applied as one undoable edit. */
+export interface ReplaceRequest {
+  path: ProjectPath;
+  content: string;
+  nonce: number;
+}
+
 export interface WorkspaceState {
   projectStatus: "none" | "loading" | "ready" | "error";
   project: ProjectInfo | null;
@@ -98,6 +105,7 @@ export interface WorkspaceState {
   intelligence: IntelligenceState;
   editorSettings: EditorSettings;
   reveal: RevealRequest | null;
+  replace: ReplaceRequest | null;
 }
 
 export function createInitialState(
@@ -115,6 +123,7 @@ export function createInitialState(
     intelligence: { status: "idle" },
     editorSettings,
     reveal: null,
+    replace: null,
   };
 }
 
@@ -139,6 +148,7 @@ export type WorkspaceAction =
   | { type: "settings/changed"; settings: Partial<EditorSettings> }
   | { type: "diagnostics/replaced"; source: string; path: ProjectPath; diagnostics: Diagnostic[] }
   | { type: "editor/reveal"; request: RevealRequest }
+  | { type: "editor/replace"; request: ReplaceRequest }
   | { type: "analysis/updated"; path: ProjectPath; analysis: FileAnalysis }
   | { type: "intelligence/updated"; intelligence: IntelligenceState };
 
@@ -311,6 +321,19 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
 
     case "editor/reveal":
       return { ...state, reveal: action.request };
+
+    case "editor/replace": {
+      const buffer = state.buffers[action.request.path];
+      if (!buffer || buffer.status !== "ready") return state;
+      return {
+        ...state,
+        buffers: {
+          ...state.buffers,
+          [action.request.path]: { ...buffer, content: action.request.content },
+        },
+        replace: action.request,
+      };
+    }
 
     case "analysis/updated":
       return { ...state, analysis: { ...state.analysis, [action.path]: action.analysis } };

@@ -1,8 +1,9 @@
 # Architecture
 
 This document describes the architecture of Batch 1 (Modules 1–3: foundation, editor, API), Batch 2
-(Modules 4–6: code analysis, project intelligence, persistence), and Batch 3 (authentication,
-application areas, project ownership, history), and where later modules plug in.
+(Modules 4–6: code analysis, project intelligence, persistence), Batch 3 (authentication,
+application areas, project ownership, history), and Batch 4 (Modules 7–9: AI analysis, AI
+explanations and fix suggestions, project-aware search), and where later modules plug in.
 
 ## Layers
 
@@ -215,6 +216,60 @@ automatically, so the upgrade refuses to run while such projects exist, unless
 - **CSRF:** `SameSite=Lax` cookie + `OriginCheckMiddleware` (state-changing requests with a foreign
   `Origin` get 403) + CORS restricted to `CODEWALK_CORS_ORIGINS` with credentials.
 
+### AI assistance (Modules 7 and 8)
+
+```
+services/ai/
+  base.py         AIProvider protocol, normalized AIError hierarchy, ProviderStatus
+  providers/      registry (create_provider) + anthropic.py (official SDK)
+  prompts/        system prompts and rendering (common, code_analysis, explanation, fix)
+  outputs.py      the JSON shapes the model must return (schema + validation)
+  edits.py        CodeEdit conversion/validation/application, safety limits, unified diffs
+  service.py      AIService (app-wide) and AIAssistant (per request)
+```
+
+- **Provider independence:** application code depends only on `AIProvider.status()` (no network)
+  and `generate_structured(system, user, schema, …)`, which returns a JSON object or raises an
+  `AIError`. The Anthropic provider uses `messages.create` with structured outputs
+  (`output_config.format`) and reasoning `effort`. On current models it adds server-side refusal
+  fallback (`fallbacks: "default"`). It maps SDK exceptions to `ai_timeout`, `ai_rate_limited`,
+  `ai_unavailable`, `ai_provider_error`, `ai_context_too_large`, `ai_refused`, and
+  `ai_malformed_response`. A new provider is one class plus one registry entry.
+- **Flow:** editor buffer + deterministic diagnostics → (ownership check and project context) →
+  prompt with numbered lines → provider → schema validation (`outputs.py`) → normalization against
+  the real text → response → (record + history when a project is given).
+- **Prompts** require the model to analyze only the supplied evidence, separate observation from
+  inference, cite line numbers, never claim execution, report security issues only with evidence,
+  avoid unrelated rewrites, and treat any instructions inside code as data. Review prompts tell the
+  model not to repeat the deterministic diagnostics.
+- **Fixes are proposals:** the model returns whole-line edits, which `edits.py` converts to exact
+  `CodeEdit` ranges, validates, and applies to the submitted text only to produce
+  `suggested_code` + diff. The browser shows a Monaco diff, and **Apply** replaces the editor content
+  as one undoable edit, only if the buffer still equals `original_code`. Saving remains a separate,
+  explicit action.
+- **Persistence:** AI results for project files are stored in `analyses`
+  (`ai_review`/`ai_explanation`/`ai_fix_suggestion`, newest 20 per file and type) with provider,
+  model, usage, a hash of the code, and the validated answer, but not the code itself. Each result
+  also gets an `ai.*` history event. Migration `aa335eec9810` only widens the two CHECK constraints.
+- **Abuse limits:** a per-user request limit (`CODEWALK_AI_MAX_REQUESTS` per window), the existing
+  body limit, `max_source_bytes` for code, and bounded context.
+- **Frontend:** `features/ai/ai-assist-context.tsx` holds AI status and the current
+  explanation/fix/review per workspace. The UI lives in the existing workflow: *Explain* on Problems
+  rows, the explanation beside the Problems list, the fix diff over the editor, and an *AI Review*
+  bottom tab. There is no chat interface.
+
+### Project search and context (Module 9)
+
+`services/project_search/` builds an in-memory `ProjectIndex` from Module 5
+(`ProjectIntelligenceService.structure_of`, using the per-file structure cache keyed by content
+hash). The index holds files' lines, symbols, imports, and import relationships. It is cached per
+project (LRU of 32, per process) under the fingerprint of all `(path, content_hash)` pairs, which
+one metadata query reads, so unchanged projects are never re-parsed and any save invalidates the
+entry. `ranking.py` holds the fixed, documented weights. `ProjectContextBuilder` (`context.py`)
+selects bounded context in a fixed order: definitions of names quoted in diagnostics, query or
+current-symbol matches, definitions of names the file imports, and the files that import it. This
+is the seam where Module 10 (semantic retrieval) can add candidates.
+
 ### Security foundations
 
 - Typed settings validation: wildcard CORS is rejected, and production requires a strong secret key.
@@ -226,4 +281,18 @@ automatically, so the upgrade refuses to run while such projects exist, unless
   paths.
 - `integrations/http_client.ExternalHTTPClient` maps timeouts, connection errors, HTTP errors, and
   malformed bodies to typed exceptions, so an external outage cannot crash a request.
-- User code is never executed.
+- User code is never executed, including by the AI features. Provider credentials are server-side
+  `SecretStr` settings, never returned (`/ai/status` reports only whether one is configured) and
+  never logged. Provider error bodies are not passed through to clients.
+- Search, snippets, and context read only the caller's own project records, never the filesystem.
+  Paths are validated (no `..`, absolute, or drive paths), ignored and secret files are excluded,
+  and result and snippet sizes are bounded.
+
+### Known limitations (Batch 4)
+
+- Only the Anthropic provider is implemented. AI quality depends on the model, and answers are
+  advisory.
+- Search is lexical and structural, not semantic (Module 10). Symbol extraction covers Python and
+  JS/TS, and other languages are searched by file name and text.
+- Fix suggestions change one file and need files under 100,000 characters.
+- Rate limits and the search index cache are per process.

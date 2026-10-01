@@ -4,10 +4,10 @@ CodeWalk Agent is an AI-assisted coding environment: a browser-based IDE that he
 write, understand, debug, and improve code, and eventually understand whole projects through
 deterministic analysis, project intelligence, retrieval-augmented generation (RAG), and AI agents.
 
-> **Status:** Batches 1–3 of 6 are complete: foundation, editor, and API (Modules 1–3); code
-> analysis, project intelligence, and PostgreSQL persistence (Modules 4–6); accounts, application
-> areas (Coding, Projects, History), and per-user project ownership (Batch 3). Features listed under
-> *Planned* are **not implemented yet**.
+> **Status:** Batches 1–4 are complete: foundation, editor, and API (Modules 1–3); code analysis,
+> project intelligence, and PostgreSQL persistence (Modules 4–6); accounts, application areas, and
+> project ownership (Batch 3); AI code analysis, AI explanations and fix suggestions, and
+> project-aware search (Modules 7–9). Features listed under *Planned* are **not implemented yet**.
 
 ## Capabilities
 
@@ -29,6 +29,20 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
 - **History**: activity recorded as it happens (projects created/renamed/deleted/analyzed, files
   created/saved/restored/deleted/analyzed, with problem counts and file versions), grouped by day,
   filterable by project and activity, with details that link back to the project and file.
+- **AI code review (Module 7, optional)**: an *AI Review* tab reviews the open file, including unsaved
+  edits, together with its deterministic diagnostics. It can focus on general review, likely bugs,
+  quality, security, or performance, or explain the code. Findings link to lines and are labelled
+  *observed* or *inferred*, with the model's own confidence. All AI output is shown as advisory.
+- **AI explanations and fix suggestions (Module 8, optional)**: in the Problems panel, *Explain* gives
+  the meaning, likely cause, impact, and fix for a diagnostic. *Suggest a fix* opens a side-by-side
+  diff (current vs. suggested) with **Apply fix / Reject / Close review**. Nothing changes until you
+  apply. Applying changes the editor only (undoable; you then save), and only if the file still
+  matches what the suggestion was computed against.
+- **Project-aware search (Module 9)**: *Search* in the Coding sidebar (`Ctrl+Shift+F`) finds
+  functions, classes, methods, files, imports, identifiers, and text in a server project, with
+  language and symbol-type filters. Ranking is deterministic and explained (not semantic), and the
+  open file and files related to it by imports rank higher. Clicking a result opens the file at that
+  line. The same deterministic context builder supplies related code to the AI features.
 - **File versions**: each saved content change of a server file is kept as a numbered version (newest
   50 per file by default) and can be viewed or restored through the API.
 - **Coding workspace** (Next.js + Monaco): project explorer, multi-file tabs, syntax highlighting for
@@ -61,9 +75,18 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
 
 ### Planned (future batches)
 
-AI explanations and fixes with a diff/approval workflow (AI never silently overwrites code) →
-project search → RAG → multi-agent assistance → Docker deployment. Account management (password
-change/reset, email verification, settings) is not implemented yet.
+RAG / semantic retrieval (Module 10) → multi-agent assistance → Docker deployment. Account
+management (password change/reset, email verification, settings) is not implemented yet.
+
+### AI assistance: enabling it
+
+AI is **off by default**, and CodeWalk works fully without it. To enable it, set
+`CODEWALK_AI_ENABLED=true` and a server-side credential (`ANTHROPIC_API_KEY`) in your local `.env`,
+then restart the backend. The only provider implemented is Anthropic (Claude; default model
+`claude-opus-5-5`, via the official `anthropic` SDK). Other providers plug in behind the same
+`AIProvider` interface. The key stays on the server: it is never sent to the browser, returned by the
+API, or logged. Without it, `GET /api/v1/ai/status` explains what is missing, and the UI shows
+"AI unavailable" instead of results.
 
 ## Architecture
 
@@ -172,7 +195,11 @@ The repository-level `.env` is read by both the backend and the frontend (`backe
 | `CODEWALK_LOGIN_MAX_ATTEMPTS`, `CODEWALK_LOGIN_WINDOW_SECONDS` | failed sign-ins per address + email before HTTP 429 |
 | `CODEWALK_REGISTER_MAX_ATTEMPTS`, `CODEWALK_REGISTER_WINDOW_SECONDS` | registrations per address before HTTP 429 |
 | `CODEWALK_FILE_VERSION_HISTORY_LIMIT`, `CODEWALK_ANALYSIS_HISTORY_PER_FILE` | versions / analyses kept per file |
-| `CODEWALK_AI_*` | read by settings; reserved for the AI modules |
+| `CODEWALK_AI_ENABLED` | turn AI assistance on (default `false`) |
+| `ANTHROPIC_API_KEY` (or `CODEWALK_AI_API_KEY`) | provider credential, **server-side only** |
+| `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | `anthropic`; model (default `claude-opus-5-5`) |
+| `CODEWALK_AI_TIMEOUT_SECONDS`, `CODEWALK_AI_MAX_TOKENS`, `CODEWALK_AI_EFFORT` | request limits and reasoning effort |
+| `CODEWALK_AI_MAX_REQUESTS`, `CODEWALK_AI_WINDOW_SECONDS` | AI requests per user per window (then 429) |
 | `NEXT_PUBLIC_API_BASE_URL` | backend API base URL used by the browser |
 
 Production startup fails fast on an insecure configuration (missing or weak secret key, wildcard CORS).
@@ -210,6 +237,11 @@ npm run check            # lint + format check + typecheck + tests
 
 Per service: `cd backend && uv run pytest | ruff check app tests | mypy`, and
 `cd frontend && npm run test | lint | typecheck | build`.
+
+**AI tests** never call a paid provider by default. The provider is tested through the real SDK
+with a mock HTTP transport, and the AI endpoints use a test-only stub provider (`tests/ai_stub.py`)
+to check CodeWalk's own logic. `tests/test_live_ai_provider.py` sends one real request only when a
+credential is present in the environment, and is skipped otherwise.
 
 **PostgreSQL tests** (`backend/tests/db`) run against a real database and are skipped, never faked,
 when `CODEWALK_TEST_DATABASE_URL` is unset. They rebuild the schema with the Alembic migrations, so

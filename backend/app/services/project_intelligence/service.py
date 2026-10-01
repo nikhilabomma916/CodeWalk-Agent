@@ -124,6 +124,12 @@ class ProjectIntelligenceService:
         result.analyzed_at = analysis.created_at.astimezone(UTC)
         return result
 
+    def structure_of(self, project: Project, records: Sequence[ProjectFile]) -> ProjectAnalysisResult:
+        """Files, symbols, imports and relationships of stored files, without scanning or recording
+        an analysis. Per-file structure comes from the content-hash cache; structures computed for
+        changed files are written back to it (the caller commits)."""
+        return self._build(project, records, None, 0)
+
     def _build(
         self,
         project: Project,

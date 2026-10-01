@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
+import { FixReview } from "@/features/ai/fix-review";
 import { useLiveAnalysis } from "@/features/analysis/use-live-analysis";
 import { isDirty } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
@@ -23,7 +24,8 @@ const MonacoEditor = dynamic(() => import("./monaco-editor"), {
 
 export function EditorArea() {
   const { state, actions } = useWorkspace();
-  const { project, openPaths, activePath, buffers, editorSettings, reveal, diagnostics } = state;
+  const { project, openPaths, activePath, buffers, editorSettings, reveal, replace, diagnostics } =
+    state;
   const setCursor = useSetCursor();
   const monacoStatus = useMonacoStatus();
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
@@ -133,6 +135,7 @@ export function EditorArea() {
         openPaths={openPaths}
         diagnostics={diagnosticsByPath}
         reveal={reveal}
+        replace={replace}
         onChange={actions.editFile}
         onSave={(path) => void actions.saveFile(path)}
         onCursor={handleCursor}
@@ -177,6 +180,7 @@ export function EditorArea() {
       <div className="relative min-h-0 flex-1">
         {body}
         {overlay && <div className="absolute inset-0 z-10 bg-surface">{overlay}</div>}
+        {ready && <FixReview path={activePath} />}
       </div>
     </div>
   );

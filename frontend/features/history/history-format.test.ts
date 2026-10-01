@@ -89,3 +89,25 @@ describe("describeEvent / eventFacts", () => {
     );
   });
 });
+
+describe("AI events", () => {
+  it("describes AI activity with its model and outcome", () => {
+    const reviewed = event({
+      event_type: "ai.analyzed",
+      details: { diagnostic_count: 2, model: "claude-opus-5-5" },
+    });
+    expect(describeEvent(reviewed)).toBe("AI review of src/app.py");
+    expect(eventFacts(reviewed)).toEqual(["2 findings", "claude-opus-5-5"]);
+    expect(describeEvent(event({ event_type: "ai.explained", details: {} }))).toBe(
+      "AI explained a problem in src/app.py",
+    );
+    expect(
+      describeEvent(
+        event({ event_type: "ai.fix_suggested", details: { status: "no_suggestion" } }),
+      ),
+    ).toBe("AI found no safe fix for src/app.py");
+    expect(
+      eventFacts(event({ event_type: "ai.explained", details: { diagnostic_count: 0 } })),
+    ).toEqual([]);
+  });
+});

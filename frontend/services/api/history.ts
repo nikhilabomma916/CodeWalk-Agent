@@ -12,6 +12,9 @@ export const HISTORY_EVENT_TYPES = [
   "file.restored",
   "file.deleted",
   "file.analyzed",
+  "ai.analyzed",
+  "ai.explained",
+  "ai.fix_suggested",
 ] as const;
 
 export type HistoryEventType = (typeof HISTORY_EVENT_TYPES)[number];

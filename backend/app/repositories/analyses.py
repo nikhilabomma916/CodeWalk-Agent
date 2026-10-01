@@ -58,21 +58,13 @@ class AnalysisRepository:
             .limit(1)
         )
 
-    def prune_file_history(self, file_id: uuid.UUID, keep: int) -> int:
-        """Delete all but the newest ``keep`` code analyses of a file."""
-        keep_ids = (
-            select(Analysis.id)
-            .where(Analysis.file_id == file_id)
-            .order_by(Analysis.created_at.desc())
-            .limit(keep)
-        )
-        result = self.session.execute(
-            delete(Analysis).where(
-                Analysis.file_id == file_id,
-                Analysis.analysis_type == AnalysisType.CODE,
-                Analysis.id.not_in(keep_ids),
-            )
-        )
+    def prune_file_history(
+        self, file_id: uuid.UUID, keep: int, analysis_type: AnalysisType = AnalysisType.CODE
+    ) -> int:
+        """Delete all but the newest ``keep`` analyses of one type for a file."""
+        same_type = (Analysis.file_id == file_id, Analysis.analysis_type == analysis_type)
+        keep_ids = select(Analysis.id).where(*same_type).order_by(Analysis.created_at.desc()).limit(keep)
+        result = self.session.execute(delete(Analysis).where(*same_type, Analysis.id.not_in(keep_ids)))
         self.session.flush()
         return int(getattr(result, "rowcount", 0) or 0)
 

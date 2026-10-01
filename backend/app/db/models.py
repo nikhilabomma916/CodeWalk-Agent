@@ -33,6 +33,10 @@ MAX_PATH_LENGTH = 1024
 class AnalysisType(StrEnum):
     CODE = "code"
     PROJECT_INTELLIGENCE = "project_intelligence"
+    # AI results (advisory). Details hold provider, model, and the validated answer, not the code.
+    AI_REVIEW = "ai_review"
+    AI_EXPLANATION = "ai_explanation"
+    AI_FIX_SUGGESTION = "ai_fix_suggestion"
 
 
 class AnalysisStatus(StrEnum):
@@ -71,6 +75,9 @@ class ActivityType(StrEnum):
     FILE_RESTORED = "file.restored"
     FILE_DELETED = "file.deleted"
     FILE_ANALYZED = "file.analyzed"
+    AI_ANALYZED = "ai.analyzed"
+    AI_EXPLAINED = "ai.explained"
+    AI_FIX_SUGGESTED = "ai.fix_suggested"
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):

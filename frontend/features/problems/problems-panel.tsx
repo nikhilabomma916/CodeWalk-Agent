@@ -1,13 +1,16 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+
+import { useAIAssist } from "@/features/ai/ai-assist-context";
+import { ExplanationPanel } from "@/features/ai/explanation-panel";
 
 import type { FileAnalysis } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import type { AnalysisCapability } from "@/services/api/analysis";
 import { SEVERITY_ORDER, type Diagnostic } from "@/types/diagnostics";
 
-import { ProblemsList } from "./problems-list";
+import { diagnosticKey, ProblemsList } from "./problems-list";
 
 export interface DiagnosticCounts {
   error: number;
@@ -71,32 +74,52 @@ export function ProblemsPanel() {
   const { state, actions } = useWorkspace();
   const { diagnostics, counts } = useAllDiagnostics();
   const active = state.activePath ? state.analysis[state.activePath] : undefined;
+  const { explanation, explain } = useAIAssist();
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  const select = (diagnostic: Diagnostic) =>
+  const select = (diagnostic: Diagnostic) => {
+    setSelectedKey(diagnosticKey(diagnostic));
     void actions.revealPosition(diagnostic.file, diagnostic.line, diagnostic.column);
+  };
+  const explainWithAI = (diagnostic: Diagnostic) => {
+    setSelectedKey(diagnosticKey(diagnostic));
+    void explain(diagnostic);
+  };
 
   return (
-    <section aria-label="Problems" className="flex h-full min-h-0 flex-col">
-      <p className="flex shrink-0 flex-wrap gap-x-3 border-b border-border px-3 py-1 text-[11px] text-fg-muted">
-        <span>
-          {counts.error} errors · {counts.warning} warnings
-          {counts.other ? ` · ${counts.other} info/suggestions` : ""}
-        </span>
-        {state.activePath && (
-          <span className="truncate text-fg-subtle" title={describeAnalysis(active)}>
-            {describeAnalysis(active)}
+    <div className="flex h-full min-h-0">
+      <section aria-label="Problems" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <p className="flex shrink-0 flex-wrap gap-x-3 border-b border-border px-3 py-1 text-[11px] text-fg-muted">
+          <span>
+            {counts.error} errors · {counts.warning} warnings
+            {counts.other ? ` · ${counts.other} info/suggestions` : ""}
           </span>
-        )}
-      </p>
-      {diagnostics.length === 0 ? (
-        <p role="status" className="px-3 py-2 text-xs text-fg-muted">
-          {state.openPaths.length === 0
-            ? "Open a file to analyze it."
-            : "No problems reported for open files."}
+          {state.activePath && (
+            <span className="truncate text-fg-subtle" title={describeAnalysis(active)}>
+              {describeAnalysis(active)}
+            </span>
+          )}
         </p>
-      ) : (
-        <ProblemsList diagnostics={diagnostics} onSelect={select} />
+        {diagnostics.length === 0 ? (
+          <p role="status" className="px-3 py-2 text-xs text-fg-muted">
+            {state.openPaths.length === 0
+              ? "Open a file to analyze it."
+              : "No problems reported for open files."}
+          </p>
+        ) : (
+          <ProblemsList
+            diagnostics={diagnostics}
+            selectedKey={selectedKey}
+            onSelect={select}
+            onExplain={explainWithAI}
+          />
+        )}
+      </section>
+      {explanation && (
+        <div className="w-[min(28rem,55%)] shrink-0">
+          <ExplanationPanel />
+        </div>
       )}
-    </section>
+    </div>
   );
 }

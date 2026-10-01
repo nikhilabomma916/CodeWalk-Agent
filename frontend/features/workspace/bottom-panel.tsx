@@ -4,11 +4,17 @@ import { X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/ui/icon-button";
+import { AIReviewPanel } from "@/features/ai/ai-review-panel";
 import { IntelligencePanel } from "@/features/intelligence/intelligence-panel";
 import { ProblemsPanel, useAllDiagnostics } from "@/features/problems/problems-panel";
 
-type PanelTab = "problems" | "project";
-const TABS: PanelTab[] = ["problems", "project"];
+type PanelTab = "problems" | "ai" | "project";
+const TABS: PanelTab[] = ["problems", "ai", "project"];
+const TAB_LABEL: Record<PanelTab, string> = {
+  problems: "Problems",
+  ai: "AI Review",
+  project: "Project",
+};
 
 export function BottomPanel({ onClose }: { onClose(): void }) {
   const [tab, setTab] = useState<PanelTab>("problems");
@@ -32,30 +38,23 @@ export function BottomPanel({ onClose }: { onClose(): void }) {
     <div className="flex h-full min-h-0 flex-col bg-surface-sunken">
       <div className="flex h-8 shrink-0 items-center border-b border-border pr-1 pl-1">
         <div role="tablist" aria-label="Panels" className="flex" onKeyDown={onKeyDown}>
-          <button
-            id="panel-tab-problems"
-            type="button"
-            role="tab"
-            aria-selected={tab === "problems"}
-            tabIndex={tab === "problems" ? 0 : -1}
-            onClick={() => setTab("problems")}
-            className={tabClass(tab === "problems")}
-          >
-            Problems{" "}
-            {counts.error + counts.warning + counts.other > 0 &&
-              `(${counts.error + counts.warning + counts.other})`}
-          </button>
-          <button
-            id="panel-tab-project"
-            type="button"
-            role="tab"
-            aria-selected={tab === "project"}
-            tabIndex={tab === "project" ? 0 : -1}
-            onClick={() => setTab("project")}
-            className={tabClass(tab === "project")}
-          >
-            Project
-          </button>
+          {TABS.map((id) => (
+            <button
+              key={id}
+              id={`panel-tab-${id}`}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              tabIndex={tab === id ? 0 : -1}
+              onClick={() => setTab(id)}
+              className={tabClass(tab === id)}
+            >
+              {TAB_LABEL[id]}
+              {id === "problems" &&
+                counts.error + counts.warning + counts.other > 0 &&
+                ` (${counts.error + counts.warning + counts.other})`}
+            </button>
+          ))}
         </div>
         <span className="flex-1" />
         <IconButton label="Close panel" shortcut="Ctrl+J" onClick={onClose}>
@@ -63,7 +62,13 @@ export function BottomPanel({ onClose }: { onClose(): void }) {
         </IconButton>
       </div>
       <div role="tabpanel" aria-labelledby={`panel-tab-${tab}`} className="min-h-0 flex-1">
-        {tab === "problems" ? <ProblemsPanel /> : <IntelligencePanel />}
+        {tab === "problems" ? (
+          <ProblemsPanel />
+        ) : tab === "ai" ? (
+          <AIReviewPanel />
+        ) : (
+          <IntelligencePanel />
+        )}
       </div>
     </div>
   );

@@ -11,6 +11,9 @@ export const EVENT_TYPE_LABELS: Record<HistoryEventType, string> = {
   "file.restored": "File restored",
   "file.deleted": "File deleted",
   "file.analyzed": "File analyzed",
+  "ai.analyzed": "AI review",
+  "ai.explained": "AI explanation",
+  "ai.fix_suggested": "AI fix suggestion",
 };
 
 function detail<T>(
@@ -65,6 +68,14 @@ export function describeEvent(event: HistoryEvent): string {
       return `Deleted ${file}`;
     case "file.analyzed":
       return `Analyzed ${file}`;
+    case "ai.analyzed":
+      return `AI review of ${file}`;
+    case "ai.explained":
+      return `AI explained a problem in ${file}`;
+    case "ai.fix_suggested":
+      return detail(event, "status", isString) === "no_suggestion"
+        ? `AI found no safe fix for ${file}`
+        : `AI suggested a fix for ${file}`;
   }
 }
 
@@ -74,9 +85,17 @@ export function eventFacts(event: HistoryEvent): string[] {
   const version = eventVersion(event);
   if (version !== undefined) facts.push(`v${version}`);
   const diagnostics = eventDiagnosticCount(event);
-  if (diagnostics !== undefined && event.event_type !== "project.analyzed") {
+  if (event.event_type === "ai.analyzed" && diagnostics !== undefined) {
+    facts.push(diagnostics === 0 ? "no findings" : plural(diagnostics, "finding"));
+  } else if (
+    diagnostics !== undefined &&
+    event.event_type !== "project.analyzed" &&
+    !event.event_type.startsWith("ai.")
+  ) {
     facts.push(diagnostics === 0 ? "no problems" : plural(diagnostics, "problem"));
   }
+  const model = detail(event, "model", isString);
+  if (event.event_type.startsWith("ai.") && model) facts.push(model);
   const statistics = event.details.statistics;
   if (event.event_type === "project.analyzed" && statistics && typeof statistics === "object") {
     const stats = statistics as Record<string, unknown>;

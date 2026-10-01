@@ -23,12 +23,16 @@ from app.core.rate_limit import AttemptLimiter
 from app.db.models import User
 from app.db.session import Database
 from app.services.activity import HistoryService
+from app.services.ai.service import AIAssistant, AIService
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.service import AnalysisService
 from app.services.auth import AuthService, NotAuthenticatedError
 from app.services.files import FileService
 from app.services.health import HealthService
 from app.services.project_intelligence.service import ProjectIntelligenceService
+from app.services.project_search.context import ProjectContextBuilder
+from app.services.project_search.index import IndexCache
+from app.services.project_search.service import ProjectSearchService
 from app.services.projects import ProjectService
 
 
@@ -130,3 +134,40 @@ AnalysisServiceDep = Annotated[AnalysisService, Depends(get_analysis_service)]
 FileServiceDep = Annotated[FileService, Depends(get_file_service)]
 IntelligenceServiceDep = Annotated[ProjectIntelligenceService, Depends(get_intelligence_service)]
 HistoryServiceDep = Annotated[HistoryService, Depends(get_history_service)]
+
+
+def get_ai_service(request: Request) -> AIService:
+    service: AIService = request.app.state.ai_service
+    return service
+
+
+def get_index_cache(request: Request) -> IndexCache:
+    cache: IndexCache = request.app.state.search_index_cache
+    return cache
+
+
+AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
+IndexCacheDep = Annotated[IndexCache, Depends(get_index_cache)]
+
+
+def get_search_service(
+    session: SessionDep, settings: SettingsDep, user: CurrentUserDep, cache: IndexCacheDep
+) -> ProjectSearchService:
+    return ProjectSearchService(session, settings, user, cache)
+
+
+SearchServiceDep = Annotated[ProjectSearchService, Depends(get_search_service)]
+
+
+def get_context_builder(search: SearchServiceDep) -> ProjectContextBuilder:
+    return ProjectContextBuilder(search)
+
+
+def get_ai_assistant(
+    session: SessionDep, settings: SettingsDep, user: CurrentUserDep, ai: AIServiceDep, cache: IndexCacheDep
+) -> AIAssistant:
+    return AIAssistant(session, settings, user, ai, cache)
+
+
+ContextBuilderDep = Annotated[ProjectContextBuilder, Depends(get_context_builder)]
+AIAssistantDep = Annotated[AIAssistant, Depends(get_ai_assistant)]

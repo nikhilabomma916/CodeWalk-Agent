@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api.routes import analysis, auth, files, health, history, meta, projects
+from app.api.routes import ai, analysis, auth, files, health, history, meta, projects, search
 from app.schemas.errors import ErrorResponse
 
 api_v1_router = APIRouter(
@@ -20,3 +20,5 @@ api_v1_router.include_router(analysis.router)
 api_v1_router.include_router(projects.router)
 api_v1_router.include_router(files.router)
 api_v1_router.include_router(history.router)
+api_v1_router.include_router(search.router)
+api_v1_router.include_router(ai.router)

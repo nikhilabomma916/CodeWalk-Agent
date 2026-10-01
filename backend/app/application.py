@@ -24,9 +24,11 @@ from app.core.middleware import (
 )
 from app.core.rate_limit import AttemptLimiter
 from app.db.session import Database, DatabaseHealthCheck
+from app.services.ai.service import AIService
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
 from app.services.health import HealthService
+from app.services.project_search.index import IndexCache
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,11 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
             settings.env.value,
             "on" if settings.docs_are_enabled else "off",
             ",".join(settings.cors_origins) or "-",
+        )
+        ai_status = app.state.ai_service.status()
+        logger.info(
+            "AI assistance: %s",
+            f"available ({ai_status.provider}, {ai_status.model})" if ai_status.available else "unavailable",
         )
         logger.info(
             "Persistence: %s; workspace scanning: %s",
@@ -97,6 +104,8 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         typescript_worker=typescript_worker,
     )
 
+    app.state.ai_service = AIService(settings)
+    app.state.search_index_cache = IndexCache()
     app.state.login_limiter = AttemptLimiter(settings.login_max_attempts, settings.login_window_seconds)
     app.state.register_limiter = AttemptLimiter(
         settings.register_max_attempts, settings.register_window_seconds

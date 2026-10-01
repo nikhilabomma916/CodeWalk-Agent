@@ -62,11 +62,21 @@ class Settings(BaseSettings):
     database_pool_size: int = Field(default=5, ge=1, le=100)
     database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
 
-    # Reserved for the AI modules; not used yet.
-    ai_provider: str | None = None
-    ai_model: str | None = None
+    # AI assistance (analysis, explanations, fix suggestions). Off unless enabled AND a provider
+    # credential is present; deterministic analysis never depends on it.
+    ai_enabled: bool = False
+    ai_provider: str | None = None  # "anthropic" (default when unset)
+    ai_model: str | None = None  # provider default when unset
+    # Provider credential. CODEWALK_AI_API_KEY wins; otherwise ANTHROPIC_API_KEY is used.
     ai_api_key: SecretStr | None = None
-    ai_request_timeout_seconds: float = Field(default=60.0, gt=0, le=600)
+    anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    ai_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+    ai_max_tokens: int = Field(default=16_000, ge=256, le=64_000)
+    # Reasoning effort sent to providers that support it.
+    ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    # AI requests allowed per user within the window (then HTTP 429).
+    ai_max_requests: int = Field(default=30, ge=1, le=10_000)
+    ai_window_seconds: int = Field(default=600, ge=1, le=86_400)
 
     secret_key: SecretStr = SecretStr("")
 
@@ -171,7 +181,7 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("database_url", "ai_api_key", mode="before")
+    @field_validator("database_url", "ai_api_key", "anthropic_api_key", mode="before")
     @classmethod
     def _blank_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -200,6 +210,10 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env is Environment.PRODUCTION
+
+    @property
+    def ai_credential(self) -> SecretStr | None:
+        return self.ai_api_key or self.anthropic_api_key
 
     @property
     def cookie_secure(self) -> bool:

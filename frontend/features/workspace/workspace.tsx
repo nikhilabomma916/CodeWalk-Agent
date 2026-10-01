@@ -5,9 +5,9 @@ import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { useBackendHealth } from "@/features/backend-status/use-backend-health";
+import { AIAssistProvider } from "@/features/ai/ai-assist-context";
 import { CursorProvider } from "@/features/editor/cursor-context";
 import { EditorArea } from "@/features/editor/editor-area";
-import { ProjectExplorer } from "@/features/explorer/project-explorer";
 import { StatusBar } from "@/features/status-bar/status-bar";
 import { isApiError } from "@/services/api/errors";
 import { createProject } from "@/services/api/projects";
@@ -15,6 +15,7 @@ import { createProject } from "@/services/api/projects";
 import { AppHeader } from "./app-header";
 import { BottomPanel } from "./bottom-panel";
 import { NewProjectDialog, type NewProjectRequest } from "./new-project-dialog";
+import { Sidebar, type SidebarView } from "./sidebar";
 import { serverAvailability, useServerProjects } from "./use-server-projects";
 import { Welcome } from "./welcome";
 import { useWorkspace, WorkspaceProvider } from "./workspace-context";
@@ -30,7 +31,9 @@ export function WorkspaceProviders({ children }: { children: ReactNode }) {
   return (
     <ConfirmProvider>
       <WorkspaceProvider>
-        <CursorProvider>{children}</CursorProvider>
+        <CursorProvider>
+          <AIAssistProvider>{children}</AIAssistProvider>
+        </CursorProvider>
       </WorkspaceProvider>
     </ConfirmProvider>
   );
@@ -45,6 +48,8 @@ export function CodingWorkspace() {
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [problemsOpen, setProblemsOpen] = useState(true);
+  const [sidebarView, setSidebarView] = useState<SidebarView>("explorer");
+  const [searchFocus, setSearchFocus] = useState(0);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const hasProject = state.project !== null;
   const availability = serverAvailability(connection);
@@ -134,11 +139,16 @@ export function CodingWorkspace() {
       } else if (key === "j" && !event.shiftKey) {
         event.preventDefault();
         toggleProblems();
+      } else if ((key === "f" || key === "e") && event.shiftKey) {
+        event.preventDefault();
+        sidebarRef.current?.expand();
+        setSidebarView(key === "f" ? "search" : "explorer");
+        if (key === "f") setSearchFocus((n) => n + 1);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [actions, activePath, toggleProblems, toggleSidebar]);
+  }, [actions, activePath, sidebarRef, toggleProblems, toggleSidebar]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -161,7 +171,15 @@ export function CodingWorkspace() {
               maxSize="45%"
               onResize={(size) => setSidebarOpen(size.inPixels > 0)}
             >
-              <ProjectExplorer key={state.project?.id} />
+              <Sidebar
+                view={sidebarView}
+                onViewChange={(view) => {
+                  setSidebarView(view);
+                  if (view === "search") setSearchFocus((n) => n + 1);
+                }}
+                searchFocus={searchFocus}
+                projectKey={state.project?.id}
+              />
             </Panel>
             <Separator />
             <Panel id="main" minSize={240}>

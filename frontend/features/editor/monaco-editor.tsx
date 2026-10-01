@@ -4,7 +4,7 @@ import Editor from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { useEffect, useRef } from "react";
 
-import type { EditorSettings, RevealRequest } from "@/features/workspace/state";
+import type { EditorSettings, ReplaceRequest, RevealRequest } from "@/features/workspace/state";
 import type { Diagnostic } from "@/types/diagnostics";
 
 import {
@@ -29,6 +29,8 @@ export interface MonacoEditorProps {
   /** Diagnostics per file path; rendered as markers on the matching models. */
   diagnostics: Readonly<Record<string, readonly Diagnostic[]>>;
   reveal: RevealRequest | null;
+  /** Content replacement to apply to an open file's model (keeps undo history). */
+  replace?: ReplaceRequest | null;
   onChange(path: string, content: string): void;
   onSave(path: string): void;
   onCursor(line: number, column: number, selectedChars: number): void;
@@ -119,6 +121,22 @@ export default function MonacoEditor(props: MonacoEditorProps) {
   useEffect(() => {
     if (!document.activeElement?.closest('[role="tree"]')) editorRef.current?.focus();
   }, [path]);
+
+  // Apply a requested content replacement to that file's model, as one undoable edit. The model
+  // may belong to a tab that is not shown; files without a model pick the content up from the buffer.
+  const replace = props.replace;
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || !replace) return;
+    const model = monaco.editor.getModel(monaco.Uri.parse(modelUri(projectId, replace.path)));
+    if (!model || model.getValue() === replace.content) return;
+    model.pushEditOperations(
+      [],
+      [{ range: model.getFullModelRange(), text: replace.content }],
+      () => null,
+    );
+    model.pushStackElement();
+  }, [replace, projectId]);
 
   // Navigate to a requested position (e.g. from the Problems panel).
   useEffect(() => {

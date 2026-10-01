@@ -181,7 +181,9 @@ what happened. Nothing is inferred afterwards.
 | `GET /history/{event_id}` | one event plus context: `project_exists`, `current_project_name`, `current_file_path` (after renames), and `analysis` (`status`, `language`, `duration_ms`, `diagnostic_count`, `severity_counts`) if still kept |
 
 Event types: `project.created`, `project.updated`, `project.deleted`, `project.analyzed`,
-`file.created`, `file.updated`, `file.restored`, `file.deleted`, and `file.analyzed`. Each event stores
+`file.created`, `file.updated`, `file.restored`, `file.deleted`, `file.analyzed`, `ai.analyzed`,
+`ai.explained`, and `ai.fix_suggested` (AI events are recorded only for requests with a
+`project_id`). Each event stores
 `project_name` and `file_path` as they were at the time. `project_id`/`file_id`/`analysis_id` become
 `null` once the target is deleted (or the analysis is pruned). `details` holds a small summary, such as
 `version`, `diagnostic_count`, `analysis_status`, `renamed_from`, `restored_from`, `changed`, or
@@ -189,6 +191,78 @@ Event types: `project.created`, `project.updated`, `project.deleted`, `project.a
 
 Live editor analysis (`POST /analysis/code`) is not stored, so it does not appear in the history.
 Neither do local-folder or in-browser projects.
+
+## AI assistance (Modules 7 and 8)
+
+All AI endpoints require a session. Request bodies carry the file's current text (`code`, which may
+be unsaved), `file_path` (a validated relative path), optional `language`, the deterministic
+`diagnostics` for that file (backend shape, ≤ 200), and an optional `project_id`. With a
+`project_id`, the server checks ownership (404 otherwise) and that `file_path` belongs to the
+project. It then adds related project code from the context builder below and records the result
+(`analyses` + history). Code is analyzed, never executed, and no endpoint modifies a file.
+
+| Method & path | Description |
+| --- | --- |
+| `GET /ai/status` | `{enabled, configured, available, provider, model, detail, analysis_types}`. No provider call; no credential |
+| `POST /ai/analyze` | `analysis_type` = `general_review` \| `bug_detection` \| `quality_review` \| `security_review` \| `performance_review` \| `explain_code`; optional `selected_range`. Returns `summary`, `findings[]` |
+| `POST /ai/explain` | `diagnostic` (required). Returns `problem`, `explanation`, `cause`, `impact`, `suggested_fix`, `related_code_locations[]` |
+| `POST /ai/fix-suggestion` | `diagnostic` and/or `instruction`. Returns `status` (`suggested` \| `no_suggestion`), `summary`, `explanation`, `original_code`, `original_hash`, `suggested_code`, unified `diff`, `edits[]` |
+
+Every AI response also has `request_id`, `provider`, `model`, `generated_at`, `confidence`
+(`low`/`medium`/`high`, as stated by the model), `warnings[]`, `context` (which project files were
+sent, as paths only), and `record_id`.
+
+**Findings** (`AIFinding`): `id`, `severity` (`error`/`warning`/`info`), `category` (`bug`, `logic`,
+`maintainability`, `code_smell`, `complexity`, `duplication`, `suspicious_pattern`, `performance`,
+`security`, `architecture`, `explanation`), `title`, `description`, `reasoning`, `basis`
+(`observed`/`inferred`), `file_path`, `line`, `column`, `end_line`, `end_column`, `confidence`,
+`suggestion`, `related_diagnostic_id`, and `metadata.evidence`.
+
+**Validation of AI answers.** Answers are constrained to a JSON schema and validated again on
+receipt. An unusable answer is 502 `ai_malformed_response`, never a crash. Findings that point
+outside the code are dropped, unknown diagnostic ids are cleared, and related locations outside the
+supplied evidence are dropped; each is reported in `warnings`.
+
+**Edits** (`CodeEdit`): `file_path`, `start_line`, `start_column`, `end_line`, `end_column`
+(1-based, end exclusive), `replacement_text`. Edits must target the requested file (paths are
+validated like file paths: no `..`, absolute, or drive paths), stay inside the text, not overlap, and
+number at most 20. A proposal that would empty the file or change more than 400 lines is rejected.
+An edit that fails validation is discarded (`status: "no_suggestion"` with a warning). Fix
+suggestions are limited to files under 100,000 characters. Larger files are reviewed through a
+window of lines around the focus (with a warning).
+
+| Status | `code` | When |
+| --- | --- | --- |
+| 503 | `ai_disabled`, `ai_not_configured`, `ai_unavailable` | AI off, no credential/unknown provider, provider unreachable |
+| 504 | `ai_timeout` | provider timeout |
+| 429 | `too_many_ai_requests`, `ai_rate_limited` | per-user limit (`Retry-After`), or the provider's own limit |
+| 422 | `invalid_range`, `ai_refused`, `validation_error` | diagnostic/range outside the code; provider declined; bad body |
+| 413 | `source_too_large`, `ai_context_too_large` | code too large; provider says the request is too large |
+| 502 | `ai_provider_error`, `ai_malformed_response` | provider rejected the request; unusable answer |
+
+## Project search and context (Module 9)
+
+Deterministic (no embeddings or vectors), owner-only, over the project's stored files (never the
+filesystem). Ignored folders (`node_modules`, `.venv`, …) and secret files are never searched.
+
+| Method & path | Description |
+| --- | --- |
+| `POST /projects/{id}/search` | `{query, filters?: {language, symbol_type, path_prefix, match_types}, limit ≤ 100, current_file?}` |
+| `POST /projects/{id}/snippet` | `{file_path, line, before ≤ 20, after ≤ 40}`: a bounded excerpt |
+| `POST /projects/{id}/context` | `{current_file, line?, query?, current_symbol?, diagnostics?}` → `RelevantContext` |
+
+A search result has `file_path`, `symbol_name`, `symbol_type`, `qualified_name`, `language`,
+`line`, `end_line`, `column`, `score`, `score_details` (`base`, `coverage`, `context_bonus`),
+`match_type`, `match_reason`, `snippet` (≤ 12 lines, ≤ 300 characters per line), and
+`related_symbols`. **Ranking:** `score = base × coverage + context bonus`, with bases
+`symbol_exact` 100, `file_name` 90, `symbol_prefix` 80, `symbol_tokens` 65, `file_path` 55,
+`import` 40, `identifier` 30, `text` 20. Results in `current_file` get +15, and files it imports or
+that import it get +10. Query terms are split on camelCase and snake_case ("UserService" → user,
+service) and match name parts by prefix.
+
+`RelevantContext` holds `current_file`, `containing_symbol`, `files[]` (with role: current, imported,
+importer, match), `snippets[]` (with `reason`), `symbols[]`, `relationships[]`, `diagnostics[]`, and
+`metadata` (strategy, limits: 8 snippets / 12,000 characters, `truncated`).
 
 ## Errors
 
@@ -210,7 +284,7 @@ All errors share one shape:
 | 400 | `bad_request` / `unsafe_path` | malformed request or rejected path |
 | 401 | `not_authenticated`, `invalid_credentials` | no or expired session; wrong email or password |
 | 403 | `account_disabled`, `origin_not_allowed` | disabled account; cross-site write |
-| 404 | `not_found`, `project_not_found`, `file_not_found`, `analysis_not_found`, `version_not_found`, `history_event_not_found`, `folder_not_found`, `not_analyzed` | unknown route or resource (or another user's) |
+| 404 | `not_found`, `project_not_found`, `file_not_found`, `analysis_not_found`, `version_not_found`, `history_event_not_found`, `folder_not_found`, `not_analyzed`, `line_out_of_range`, `no_content` | unknown route or resource (or another user's) |
 | 409 | `email_taken`, `project_exists`, `file_exists`, `project_read_only` | conflicting write |
 | 429 | `too_many_attempts` | sign-in or registration rate limit (`Retry-After` header) |
 | 413 | `source_too_large`, `content_too_large` | source above `CODEWALK_MAX_SOURCE_BYTES` |

@@ -11,6 +11,7 @@ import {
   RefreshCw,
   RotateCcw,
   ScanSearch,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
@@ -55,6 +56,9 @@ const EVENT_ICONS: Record<HistoryEventType, LucideIcon> = {
   "file.restored": RotateCcw,
   "file.deleted": FileX,
   "file.analyzed": ScanSearch,
+  "ai.analyzed": Sparkles,
+  "ai.explained": Sparkles,
+  "ai.fix_suggested": Sparkles,
 };
 
 function isEventType(value: string | null): value is HistoryEventType {
@@ -481,6 +485,8 @@ function HistoryDetail({ eventId, onClose }: { eventId: string; onClose(): void 
               {row("Status", detail.analysis.status)}
               {detail.analysis.language && row("Language", detail.analysis.language)}
               {row("Duration", `${detail.analysis.duration_ms} ms`)}
+              {detail.analysis.analysis_type === "ai_review" &&
+                row("Findings", detail.analysis.diagnostic_count)}
               {detail.analysis.analysis_type === "code" &&
                 row(
                   "Problems",

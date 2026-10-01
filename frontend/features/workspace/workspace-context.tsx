@@ -109,6 +109,11 @@ export interface WorkspaceActions {
   replaceDiagnostics(source: string, path: ProjectPath, diagnostics: Diagnostic[]): void;
   setAnalysis(path: ProjectPath, analysis: FileAnalysis): void;
   revealPosition(path: ProjectPath, line: number, column: number): Promise<void>;
+  /**
+   * Replaces an open file's content in the editor (one undoable edit; the file is then unsaved).
+   * Used when the developer applies a reviewed AI fix.
+   */
+  replaceContent(path: ProjectPath, content: string): void;
   /** Opens a project stored by the backend. Resolves false if the user kept the current one. */
   openServerProject(project: ServerProject): Promise<boolean>;
   /** Reopens the server project used last (after a page reload); false if none/unavailable. */
@@ -435,6 +440,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         dispatch({
           type: "editor/reveal",
           request: { path, line, column, nonce: revealNonce.current },
+        });
+      },
+
+      replaceContent(path, content) {
+        revealNonce.current += 1;
+        dispatch({
+          type: "editor/replace",
+          request: { path, content, nonce: revealNonce.current },
         });
       },
     }),

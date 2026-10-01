@@ -5,6 +5,7 @@ description = "FastAPI backend for CodeWalk Agent"
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.20.0",
+    "anthropic>=1",
     "argon2-cffi>=23.1",
     "email-validator>=2.2",
     "fastapi>=0.142.2",
