@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import datetime
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app import __version__
 from app.services.health import HealthCheckFailedError, HealthService
+from tests.conftest import build_app
 
 
 class StubCheck:
@@ -31,7 +33,11 @@ def health_service(app: FastAPI) -> HealthService:
     return service
 
 
-def test_health_reports_alive_without_unverified_dependencies(client: TestClient) -> None:
+def check(body: dict[str, Any], name: str) -> dict[str, Any]:
+    return next(item for item in body["checks"] if item["name"] == name)
+
+
+def test_health_reports_database_as_not_configured(client: TestClient) -> None:
     response = client.get("/api/v1/health")
 
     assert response.status_code == 200
@@ -41,8 +47,11 @@ def test_health_reports_alive_without_unverified_dependencies(client: TestClient
     assert body["environment"] == "testing"
     assert body["uptime_seconds"] >= 0
     datetime.fromisoformat(body["timestamp"])
-    # No database/AI checks are registered yet, so none may be claimed healthy.
-    assert body["checks"] == []
+    # No database is configured in unit tests: reported as such, never as healthy.
+    database = check(body, "database")
+    assert database["status"] == "not_configured"
+    assert database["required"] is False
+    assert database["detail"] == "CODEWALK_DATABASE_URL is not set"
 
 
 def test_liveness_probe(client: TestClient) -> None:
@@ -52,21 +61,20 @@ def test_liveness_probe(client: TestClient) -> None:
 
 
 def test_required_check_failure_makes_service_unavailable(app: FastAPI, client: TestClient) -> None:
-    health_service(app).register(StubCheck("database", required=True, behaviour="fail"))
+    health_service(app).register(StubCheck("primary", required=True, behaviour="fail"))
 
     for path in ("/api/v1/health", "/api/v1/health/ready"):
         response = client.get(path)
         assert response.status_code == 503
         body = response.json()
         assert body["status"] == "unavailable"
-        assert body["checks"][0]["name"] == "database"
-        assert body["checks"][0]["status"] == "fail"
-        assert body["checks"][0]["detail"] == "connection refused"
+        assert check(body, "primary")["status"] == "fail"
+        assert check(body, "primary")["detail"] == "connection refused"
 
 
 def test_optional_check_failure_is_degraded(app: FastAPI, client: TestClient) -> None:
     service = health_service(app)
-    service.register(StubCheck("database", required=True))
+    service.register(StubCheck("primary", required=True))
     service.register(StubCheck("ai_provider", required=False, behaviour="fail"))
 
     response = client.get("/api/v1/health")
@@ -74,36 +82,31 @@ def test_optional_check_failure_is_degraded(app: FastAPI, client: TestClient) ->
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "degraded"
-    statuses = {check["name"]: check["status"] for check in body["checks"]}
-    assert statuses == {"database": "pass", "ai_provider": "fail"}
+    statuses = {item["name"]: item["status"] for item in body["checks"]}
+    assert statuses == {"database": "not_configured", "primary": "pass", "ai_provider": "fail"}
 
 
 def test_unexpected_check_error_does_not_leak_details(app: FastAPI, client: TestClient) -> None:
-    health_service(app).register(StubCheck("database", required=True, behaviour="crash"))
+    health_service(app).register(StubCheck("primary", required=True, behaviour="crash"))
 
     response = client.get("/api/v1/health")
 
     assert response.status_code == 503
     assert "hunter2" not in response.text
-    assert response.json()["checks"][0]["detail"] == "Check raised an unexpected error"
+    assert check(response.json(), "primary")["detail"] == "Check raised an unexpected error"
 
 
-def test_hanging_check_times_out(
-    client_factory: Callable[[FastAPI], TestClient],
-) -> None:
-    from app.application import create_app
-    from tests.conftest import make_settings
-
-    app = create_app(make_settings(health_check_timeout_seconds=0.05))
+def test_hanging_check_times_out(client_factory: Callable[[FastAPI], TestClient]) -> None:
+    app = build_app(health_check_timeout_seconds=0.05)
     health_service(app).register(StubCheck("vector_store", required=False, behaviour="hang"))
     client = client_factory(app)
 
     response = client.get("/api/v1/health")
 
     assert response.status_code == 200
-    check = response.json()["checks"][0]
-    assert check["status"] == "fail"
-    assert check["detail"].startswith("Timed out")
+    result = check(response.json(), "vector_store")
+    assert result["status"] == "fail"
+    assert result["detail"].startswith("Timed out")
 
 
 def test_request_id_is_generated_and_propagated(client: TestClient) -> None:

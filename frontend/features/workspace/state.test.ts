@@ -24,6 +24,7 @@ const loadedProject: WorkspaceAction = {
     name: "demo",
     kind: "memory",
     persistence: "browser-memory",
+    readOnly: false,
     skippedEntries: 0,
     truncated: false,
   },
@@ -137,11 +138,16 @@ describe("workspaceReducer", () => {
     const diagnostic: Diagnostic = {
       id: "1",
       severity: "error",
+      category: "syntax",
       message: "Unexpected token",
       file: "b.ts",
       line: 1,
       column: 5,
+      endLine: 1,
+      endColumn: 6,
       source: "typescript",
+      fixable: false,
+      unnecessary: false,
     };
     let state = reduce([
       loadedProject,

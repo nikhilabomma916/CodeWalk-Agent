@@ -8,12 +8,12 @@ import type { EditorSettings, RevealRequest } from "@/features/workspace/state";
 import type { Diagnostic } from "@/types/diagnostics";
 
 import {
+  ANALYSIS_MARKER_OWNER,
   configureMonaco,
-  markersToDiagnostics,
   modelUri,
   MONO_FONT_STACK,
-  pathFromModelUri,
   THEME_NAME,
+  toMarkers,
   type Monaco,
 } from "./monaco-setup";
 
@@ -24,12 +24,14 @@ export interface MonacoEditorProps {
   initialContent: string;
   language: string;
   settings: EditorSettings;
+  readOnly: boolean;
   openPaths: readonly string[];
+  /** Diagnostics per file path; rendered as markers on the matching models. */
+  diagnostics: Readonly<Record<string, readonly Diagnostic[]>>;
   reveal: RevealRequest | null;
   onChange(path: string, content: string): void;
   onSave(path: string): void;
   onCursor(line: number, column: number, selectedChars: number): void;
-  onDiagnostics(path: string, diagnostics: Diagnostic[]): void;
   onReady(editor: editor.IStandaloneCodeEditor | null): void;
 }
 
@@ -39,7 +41,9 @@ export interface MonacoEditorProps {
  * here once their tab closes.
  */
 export default function MonacoEditor(props: MonacoEditorProps) {
-  const { projectId, path, initialContent, language, settings, openPaths, reveal } = props;
+  const { projectId, path, initialContent, language, settings, readOnly, openPaths, reveal } =
+    props;
+  const { diagnostics } = props;
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   // Callbacks registered with Monaco once at mount read the latest props through this ref.
@@ -70,16 +74,6 @@ export default function MonacoEditor(props: MonacoEditorProps) {
     instance.onDidChangeModel(reportCursor);
     reportCursor();
 
-    const markerSubscription = monaco.editor.onDidChangeMarkers((uris) => {
-      for (const uri of uris) {
-        const filePath = pathFromModelUri(latest.current.projectId, uri.path);
-        if (filePath === null) continue;
-        const markers = monaco.editor.getModelMarkers({ resource: uri });
-        latest.current.onDiagnostics(filePath, markersToDiagnostics(monaco, filePath, markers));
-      }
-    });
-    instance.onDidDispose(() => markerSubscription.dispose());
-
     latest.current.onReady(instance);
     if (!document.activeElement?.closest('[role="tree"]')) instance.focus();
   };
@@ -94,6 +88,22 @@ export default function MonacoEditor(props: MonacoEditorProps) {
         model.dispose();
     }
   }, [openPaths, projectId]);
+
+  // Render backend diagnostics as markers on every open model.
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco) return;
+    for (const openPath of openPaths) {
+      const model = monaco.editor.getModel(monaco.Uri.parse(modelUri(projectId, openPath)));
+      if (model) {
+        monaco.editor.setModelMarkers(
+          model,
+          ANALYSIS_MARKER_OWNER,
+          toMarkers(monaco, diagnostics[openPath] ?? []),
+        );
+      }
+    }
+  }, [diagnostics, openPaths, projectId, path]);
 
   // On unmount (no files open) release every model.
   useEffect(
@@ -139,6 +149,8 @@ export default function MonacoEditor(props: MonacoEditorProps) {
         detectIndentation: true,
         wordWrap: settings.wordWrap ? "on" : "off",
         minimap: { enabled: settings.minimap },
+        readOnly,
+        readOnlyMessage: { value: "This project is linked to a server folder and is read-only." },
         automaticLayout: true,
         scrollBeyondLastLine: false,
         smoothScrolling: true,

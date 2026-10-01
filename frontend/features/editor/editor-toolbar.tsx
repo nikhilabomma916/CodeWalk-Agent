@@ -13,6 +13,7 @@ interface EditorToolbarProps {
   detectedLanguage: LanguageId;
   languageOverride?: LanguageId;
   dirty: boolean;
+  readOnly: boolean;
   saving: boolean;
   wordWrap: boolean;
   onSave(): void;
@@ -75,6 +76,7 @@ export function EditorToolbar({
   detectedLanguage,
   languageOverride,
   dirty,
+  readOnly,
   saving,
   wordWrap,
   onSave,
@@ -101,7 +103,12 @@ export function EditorToolbar({
       >
         {path}
       </span>
-      <IconButton label="Save" shortcut="Ctrl+S" onClick={onSave} disabled={!dirty || saving}>
+      <IconButton
+        label={readOnly ? "Save (read-only project)" : "Save"}
+        shortcut="Ctrl+S"
+        onClick={onSave}
+        disabled={readOnly || !dirty || saving}
+      >
         <Save aria-hidden className="size-4" />
       </IconButton>
       <span aria-hidden className="mx-1 h-4 w-px bg-border" />

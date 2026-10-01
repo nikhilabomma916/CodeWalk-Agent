@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -16,14 +17,30 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import REQUEST_ID_HEADER, BodySizeLimitMiddleware, RequestContextMiddleware
+from app.db.session import Database, DatabaseHealthCheck
+from app.services.analysis.engine import AnalysisEngine
+from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
 from app.services.health import HealthService
 
 logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def _warm_up(worker: TypeScriptWorker) -> None:
+    """Start the TypeScript worker in the background so the first edit is fast."""
+    if worker.unavailable_reason():
+        logger.warning("TypeScript analysis unavailable: %s", worker.unavailable_reason())
+        return
+    try:
+        worker.analyze("warmup.ts", "export {};", timeout=30)
+    except TypeScriptWorkerError as exc:
+        logger.warning("TypeScript analyzer warm-up failed: %s", exc)
+
+
+def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings)
+    database = Database.from_settings(settings)
+    typescript_worker = TypeScriptWorker(settings.node_binary)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -35,8 +52,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "on" if settings.docs_are_enabled else "off",
             ",".join(settings.cors_origins) or "-",
         )
+        logger.info(
+            "Persistence: %s; workspace scanning: %s",
+            "configured" if database else "not configured (CODEWALK_DATABASE_URL unset)",
+            "enabled" if settings.workspace_root else "disabled",
+        )
+        if warm_up:
+            threading.Thread(target=_warm_up, args=(typescript_worker,), daemon=True).start()
         yield
         logger.info("Shutting down %s", settings.app_name)
+        typescript_worker.close()
+        if database is not None:
+            database.dispose()
 
     docs = settings.docs_are_enabled
     app = FastAPI(
@@ -55,6 +82,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         environment=settings.env.value,
         check_timeout_seconds=settings.health_check_timeout_seconds,
+        checks=[DatabaseHealthCheck(database)],
+    )
+    app.state.database = database
+    app.state.analysis_engine = AnalysisEngine.create_default(
+        max_source_bytes=settings.max_source_bytes,
+        timeout_seconds=settings.analysis_timeout_seconds,
+        typescript_worker=typescript_worker,
     )
 
     register_exception_handlers(app)

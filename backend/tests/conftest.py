@@ -21,7 +21,15 @@ def make_settings(**overrides: Any) -> Settings:
         "log_level": "WARNING",
     }
     values.update(overrides)
+    # Keep the source limit below a body limit shrunk by a test.
+    if "max_request_body_bytes" in overrides and "max_source_bytes" not in overrides:
+        values["max_source_bytes"] = max(1, overrides["max_request_body_bytes"] // 2)
     return Settings(_env_file=None, **values)
+
+
+def build_app(**overrides: Any) -> FastAPI:
+    """The real application with isolated settings (no background TypeScript warm-up)."""
+    return create_app(make_settings(**overrides), warm_up=False)
 
 
 @pytest.fixture
@@ -31,7 +39,7 @@ def settings() -> Settings:
 
 @pytest.fixture
 def app(settings: Settings) -> FastAPI:
-    return create_app(settings)
+    return create_app(settings, warm_up=False)
 
 
 @pytest.fixture

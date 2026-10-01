@@ -5,9 +5,11 @@ import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
+import { useLiveAnalysis } from "@/features/analysis/use-live-analysis";
 import { isDirty } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage } from "@/lib/languages";
+import type { Diagnostic } from "@/types/diagnostics";
 
 import { useSetCursor } from "./cursor-context";
 import { EditorTabs } from "./editor-tabs";
@@ -19,11 +21,9 @@ const MonacoEditor = dynamic(() => import("./monaco-editor"), {
   loading: () => <StateMessage title="Loading editor…" />,
 });
 
-const EDITOR_DIAGNOSTICS_SOURCE = "editor";
-
 export function EditorArea() {
   const { state, actions } = useWorkspace();
-  const { project, openPaths, activePath, buffers, editorSettings, reveal } = state;
+  const { project, openPaths, activePath, buffers, editorSettings, reveal, diagnostics } = state;
   const setCursor = useSetCursor();
   const monacoStatus = useMonacoStatus();
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
@@ -47,13 +47,32 @@ export function EditorArea() {
     [setCursor],
   );
 
-  const handleDiagnostics = useCallback(
-    (path: string, diagnostics: Parameters<typeof actions.replaceDiagnostics>[2]) =>
-      actions.replaceDiagnostics(EDITOR_DIAGNOSTICS_SOURCE, path, diagnostics),
-    [actions],
-  );
+  // All producers' diagnostics, per file, for the editor markers.
+  const diagnosticsByPath = useMemo(() => {
+    const merged: Record<string, Diagnostic[]> = {};
+    for (const byFile of Object.values(diagnostics)) {
+      for (const [path, items] of Object.entries(byFile)) {
+        (merged[path] ??= []).push(...items);
+      }
+    }
+    return merged;
+  }, [diagnostics]);
+
+  useLiveAnalysis(activePath, activePath ? buffers[activePath] : undefined, actions);
 
   const handleClose = useCallback((path: string) => void actions.closeTab(path), [actions]);
+
+  // Keep Monaco mounted on the previously shown file while another one loads:
+  // unmounting would dispose every model and lose the open files' undo history.
+  const [shownPath, setShownPath] = useState<string | null>(null);
+  const activeReady = !!activePath && buffers[activePath]?.status === "ready";
+  if (activeReady && shownPath !== activePath) setShownPath(activePath);
+  const editorPath =
+    activeReady && activePath
+      ? activePath
+      : shownPath && openPaths.includes(shownPath) && buffers[shownPath]?.status === "ready"
+        ? shownPath
+        : null;
 
   if (!project) return null;
 
@@ -69,11 +88,10 @@ export function EditorArea() {
   }
 
   const detected = detectLanguage(activePath);
-  const language = buffer?.languageOverride ?? detected;
 
-  let body: React.ReactNode;
+  let overlay: React.ReactNode = null;
   if (monacoStatus === "error") {
-    body = (
+    overlay = (
       <StateMessage tone="error" title="The code editor failed to load.">
         Monaco assets could not be loaded from <code className="font-mono">/monaco/vs</code>. Run{" "}
         <code className="font-mono">npm run dev</code> or{" "}
@@ -81,9 +99,9 @@ export function EditorArea() {
       </StateMessage>
     );
   } else if (!buffer || buffer.status === "loading") {
-    body = <StateMessage title={`Opening ${activePath}…`} />;
+    overlay = <StateMessage title={`Opening ${activePath}…`} />;
   } else if (buffer.status === "error") {
-    body = (
+    overlay = (
       <StateMessage
         tone="error"
         title="Unable to open file."
@@ -100,24 +118,27 @@ export function EditorArea() {
         {buffer.loadError}
       </StateMessage>
     );
-  } else {
-    body = (
+  }
+
+  const editorBuffer = editorPath ? buffers[editorPath] : undefined;
+  const body =
+    editorPath && editorBuffer && monacoStatus !== "error" ? (
       <MonacoEditor
         projectId={project.id}
-        path={activePath}
-        initialContent={buffer.content}
-        language={language}
+        path={editorPath}
+        initialContent={editorBuffer.content}
+        language={editorBuffer.languageOverride ?? detectLanguage(editorPath)}
         settings={editorSettings}
+        readOnly={project.readOnly}
         openPaths={openPaths}
+        diagnostics={diagnosticsByPath}
         reveal={reveal}
         onChange={actions.editFile}
         onSave={(path) => void actions.saveFile(path)}
         onCursor={handleCursor}
-        onDiagnostics={handleDiagnostics}
         onReady={handleReady}
       />
-    );
-  }
+    ) : null;
 
   const ready = buffer?.status === "ready";
 
@@ -137,6 +158,7 @@ export function EditorArea() {
           detectedLanguage={detected}
           languageOverride={buffer.languageOverride}
           dirty={dirtyPaths.has(activePath)}
+          readOnly={project.readOnly}
           saving={buffer.saving}
           wordWrap={editorSettings.wordWrap}
           onSave={() => void actions.saveFile(activePath)}
@@ -152,7 +174,10 @@ export function EditorArea() {
           Save failed: {buffer.saveError}
         </div>
       )}
-      <div className="relative min-h-0 flex-1">{body}</div>
+      <div className="relative min-h-0 flex-1">
+        {body}
+        {overlay && <div className="absolute inset-0 z-10 bg-surface">{overlay}</div>}
+      </div>
     </div>
   );
 }

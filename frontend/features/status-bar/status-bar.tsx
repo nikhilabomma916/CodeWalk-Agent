@@ -5,7 +5,7 @@ import { AlertTriangle, CircleX } from "lucide-react";
 import type { BackendConnection } from "@/features/backend-status/use-backend-health";
 import { useCursor } from "@/features/editor/cursor-context";
 import { useAllDiagnostics } from "@/features/problems/problems-panel";
-import { isDirty } from "@/features/workspace/state";
+import { isDirty, type FileAnalysis } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage, languageLabel } from "@/lib/languages";
 
@@ -47,7 +47,46 @@ function connectionDetail(connection: BackendConnection): string {
 const PERSISTENCE_LABEL = {
   disk: "Saves to disk",
   "browser-memory": "Saves in this tab only",
+  server: "Saved on server",
 } as const;
+
+/** Database state, taken only from the backend's real health check. */
+export function databaseStatus(
+  connection: BackendConnection,
+): { label: string; tone: string } | null {
+  if (
+    connection.state !== "online" &&
+    connection.state !== "degraded" &&
+    connection.state !== "unavailable"
+  ) {
+    return null; // backend unreachable: the database state is unknown, so nothing is claimed
+  }
+  const check = connection.health.checks.find((item) => item.name === "database");
+  if (!check) return null;
+  if (check.status === "pass") return { label: "Database: connected", tone: "" };
+  if (check.status === "not_configured") return { label: "Database: not configured", tone: "" };
+  return { label: "Database: unavailable", tone: "text-danger" };
+}
+
+function analysisLabel(analysis: FileAnalysis | undefined): { label: string; tone: string } | null {
+  if (!analysis) return null;
+  switch (analysis.status) {
+    case "pending":
+    case "running":
+      return { label: "Analyzing…", tone: "" };
+    case "unavailable":
+      return { label: "Analysis offline", tone: "text-danger" };
+    case "failed":
+      return { label: "Analysis failed", tone: "text-danger" };
+    case "done":
+      if (!analysis.capabilities.some((c) => c.status === "performed")) {
+        return { label: "No analyzer for this language", tone: "" };
+      }
+      return analysis.success
+        ? { label: "Analyzed", tone: "" }
+        : { label: "Analysis partial", tone: "text-warning" };
+  }
+}
 
 interface StatusBarProps {
   connection: BackendConnection;
@@ -62,6 +101,8 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
   const { project, activePath, buffers, editorSettings } = state;
   const buffer = activePath ? buffers[activePath] : undefined;
   const view = CONNECTION_VIEW[connection.state];
+  const database = databaseStatus(connection);
+  const analysis = analysisLabel(activePath ? state.analysis[activePath] : undefined);
 
   let fileState: string | null = null;
   if (buffer?.status === "ready") {
@@ -87,6 +128,11 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
         <span aria-hidden className={`size-2 rounded-full ${view.dot}`} />
         <span role="status">{view.label}</span>
       </button>
+      {database && (
+        <span className={`${item} ${database.tone} hidden sm:flex`} role="status">
+          {database.label}
+        </span>
+      )}
       {project && (
         <button
           type="button"
@@ -101,7 +147,9 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
         </button>
       )}
       {project && (
-        <span className={`${item} hidden md:flex`}>{PERSISTENCE_LABEL[project.persistence]}</span>
+        <span className={`${item} hidden md:flex`}>
+          {project.readOnly ? "Read-only (linked folder)" : PERSISTENCE_LABEL[project.persistence]}
+        </span>
       )}
 
       <span className="flex-1" />
@@ -112,6 +160,11 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
             <span className={item}>
               Ln {cursor.line}, Col {cursor.column}
               {cursor.selectedChars > 0 && ` (${cursor.selectedChars} selected)`}
+            </span>
+          )}
+          {analysis && (
+            <span className={`${item} ${analysis.tone}`} role="status" aria-live="polite">
+              {analysis.label}
             </span>
           )}
           <span className={`${item} hidden sm:flex`}>Tab Size: {editorSettings.tabSize}</span>

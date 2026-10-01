@@ -56,10 +56,13 @@ class Settings(BaseSettings):
     # When None, docs are enabled everywhere except production.
     docs_enabled: bool | None = None
 
-    # Consumed by the persistence module (Module 8). Not connected yet.
+    # PostgreSQL, e.g. postgresql+psycopg://user:password@localhost:5432/codewalk.
+    # When unset, the API still serves analysis; persistence endpoints return 503.
     database_url: SecretStr | None = None
+    database_pool_size: int = Field(default=5, ge=1, le=100)
+    database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
 
-    # Consumed by the AI module (Module 9). Not connected yet.
+    # Reserved for the AI modules; not used yet.
     ai_provider: str | None = None
     ai_model: str | None = None
     ai_api_key: SecretStr | None = None
@@ -70,8 +73,23 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["text", "json"] = "text"
 
-    max_request_body_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
+    # Must exceed max_source_bytes: JSON encoding can expand source text.
+    max_request_body_bytes: int = Field(default=6 * 1024 * 1024, gt=0)
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
+
+    # Largest single source file accepted for analysis or storage.
+    max_source_bytes: int = Field(default=2 * 1024 * 1024, gt=0)
+    # Per-analyzer time limit (Ruff, TypeScript worker).
+    analysis_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
+    # Node.js binary for the TypeScript analyzer; found on PATH when unset.
+    node_binary: str | None = None
+    # Code analyses kept per file (older ones are pruned).
+    analysis_history_per_file: int = Field(default=20, ge=1, le=1000)
+
+    # Server directory whose sub-folders may be linked to projects and scanned.
+    # Scanning is disabled when unset. Paths outside it are never read.
+    workspace_root: Path | None = None
+    scan_max_files: int = Field(default=10_000, ge=1, le=100_000)
 
     health_check_timeout_seconds: float = Field(default=3.0, gt=0, le=60)
 
@@ -113,12 +131,43 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("workspace_root", mode="before")
+    @classmethod
+    def _blank_path_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("workspace_root")
+    @classmethod
+    def _validate_workspace_root(cls, value: Path | None) -> Path | None:
+        if value is None:
+            return None
+        if not value.is_absolute():
+            raise ValueError("CODEWALK_WORKSPACE_ROOT must be an absolute path")
+        if not value.is_dir():
+            raise ValueError("CODEWALK_WORKSPACE_ROOT must be an existing directory")
+        return value.resolve()
+
+    @field_validator("node_binary", mode="before")
+    @classmethod
+    def _blank_node_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
     @field_validator("database_url", "ai_api_key", mode="before")
     @classmethod
     def _blank_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @model_validator(mode="after")
+    def _validate_limits(self) -> Settings:
+        if self.max_request_body_bytes <= self.max_source_bytes:
+            raise ValueError("CODEWALK_MAX_REQUEST_BODY_BYTES must be larger than CODEWALK_MAX_SOURCE_BYTES")
+        return self
 
     @model_validator(mode="after")
     def _validate_production(self) -> Settings:

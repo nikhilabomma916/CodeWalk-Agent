@@ -12,6 +12,7 @@ import { MAX_PROJECT_ENTRIES, SourceError, type ProjectSource, type SourceListin
 export class LocalSnapshotSource implements ProjectSource {
   readonly kind = "local-snapshot";
   readonly persistence = "browser-memory";
+  readonly readOnly = false;
   private readonly originals = new Map<ProjectPath, File>();
   private readonly saved = new Map<ProjectPath, string>();
   private skipped = 0;

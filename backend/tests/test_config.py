@@ -4,9 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
-from app.application import create_app
 from app.core.config import Environment, Settings
-from tests.conftest import FRONTEND_ORIGIN, make_settings
+from tests.conftest import FRONTEND_ORIGIN, build_app, make_settings
 
 STRONG_KEY = "k" * 48
 
@@ -69,7 +68,7 @@ def test_docs_enabled_outside_production(client: TestClient) -> None:
 
 
 def test_docs_disabled_in_production() -> None:
-    app = create_app(make_settings(env="production", secret_key=STRONG_KEY))
+    app = build_app(env="production", secret_key=STRONG_KEY)
     with TestClient(app) as client:
         assert client.get("/docs").status_code == 404
         assert client.get("/api/v1/openapi.json").status_code == 404
@@ -78,7 +77,7 @@ def test_docs_disabled_in_production() -> None:
 
 
 def test_info_exposes_no_secrets() -> None:
-    app = create_app(make_settings(secret_key=STRONG_KEY, ai_api_key="sk-live-abcdef"))
+    app = build_app(secret_key=STRONG_KEY, ai_api_key="sk-live-abcdef")
     with TestClient(app) as client:
         response = client.get("/api/v1/info")
     assert response.status_code == 200

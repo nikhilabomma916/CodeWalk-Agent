@@ -52,7 +52,8 @@ def test_backend_error_contract(http: httpx.Client) -> None:
     assert missing.status_code == 404
     assert missing.json()["error"]["code"] == "not_found"
 
-    too_large = http.post(f"{API_URL}/health", content=b"x" * (3 * 1024 * 1024))
+    # Larger than the default CODEWALK_MAX_REQUEST_BODY_BYTES (6 MiB).
+    too_large = http.post(f"{API_URL}/health", content=b"x" * (7 * 1024 * 1024))
     assert too_large.status_code == 413
     assert too_large.json()["error"]["code"] == "payload_too_large"
 

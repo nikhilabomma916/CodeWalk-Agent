@@ -15,12 +15,16 @@ import {
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { buildTree } from "@/lib/project-paths";
 import type { LanguageId } from "@/lib/languages";
+import { isApiError } from "@/services/api/errors";
+import { analyzeProject, getProjectIntelligence } from "@/services/api/intelligence";
+import { getProject, type ServerProject } from "@/services/api/projects";
 import type { Diagnostic } from "@/types/diagnostics";
 import type { ProjectFolderNode, ProjectPath } from "@/types/project";
 
 import { LocalDirectorySource, supportsDirectoryAccess } from "./sources/local-directory-source";
 import { LocalSnapshotSource } from "./sources/local-snapshot-source";
 import { MemoryProjectSource } from "./sources/memory-source";
+import { ServerProjectSource } from "./sources/server-source";
 import { SourceError, type ProjectSource } from "./sources/types";
 import {
   createInitialState,
@@ -28,10 +32,29 @@ import {
   isDirty,
   workspaceReducer,
   type EditorSettings,
+  type FileAnalysis,
   type WorkspaceState,
 } from "./state";
 
 const SETTINGS_STORAGE_KEY = "codewalk.editorSettings";
+const LAST_SERVER_PROJECT_KEY = "codewalk.lastServerProject";
+
+function rememberServerProject(id: string | null): void {
+  try {
+    if (id) window.localStorage.setItem(LAST_SERVER_PROJECT_KEY, id);
+    else window.localStorage.removeItem(LAST_SERVER_PROJECT_KEY);
+  } catch {
+    // Storage unavailable: the project is simply not reopened automatically.
+  }
+}
+
+function lastServerProject(): string | null {
+  try {
+    return window.localStorage.getItem(LAST_SERVER_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
 
 function loadStoredSettings(): EditorSettings {
   try {
@@ -57,6 +80,7 @@ function loadStoredSettings(): EditorSettings {
 
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof SourceError) return error.message;
+  if (isApiError(error)) return error.message;
   return fallback;
 }
 
@@ -82,7 +106,16 @@ export interface WorkspaceActions {
   setLanguage(path: ProjectPath, language: LanguageId | null): void;
   updateSettings(settings: Partial<EditorSettings>): void;
   replaceDiagnostics(source: string, path: ProjectPath, diagnostics: Diagnostic[]): void;
+  setAnalysis(path: ProjectPath, analysis: FileAnalysis): void;
   revealPosition(path: ProjectPath, line: number, column: number): Promise<void>;
+  /** Opens a project stored by the backend. */
+  openServerProject(project: ServerProject): Promise<void>;
+  /** Reopens the server project used last (after a page reload); false if none/unavailable. */
+  restoreServerProject(): Promise<boolean>;
+  /** Runs project intelligence (rescanning linked folders) and refreshes the file tree. */
+  analyzeServerProject(): Promise<void>;
+  /** Loads the latest stored project intelligence, if any. */
+  loadIntelligence(): Promise<void>;
 }
 
 interface WorkspaceContextValue {
@@ -162,6 +195,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           name: source.name,
           kind: source.kind,
           persistence: source.persistence,
+          readOnly: source.readOnly,
+          serverProjectId: source.serverProjectId,
+          rootPath: source instanceof ServerProjectSource ? source.rootPath : undefined,
           skippedEntries: listing.skipped,
           truncated: listing.truncated,
         },
@@ -171,6 +207,31 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (sourceRef.current !== source) return;
       sourceRef.current = null;
       dispatch({ type: "project/failed", error: errorMessage(error, "Unable to load project.") });
+      return;
+    }
+    rememberServerProject(source.serverProjectId ?? null);
+  }, []);
+
+  const loadIntelligence = useCallback(async () => {
+    const source = sourceRef.current;
+    if (!source?.serverProjectId) return;
+    dispatch({ type: "intelligence/updated", intelligence: { status: "loading" } });
+    try {
+      const data = await getProjectIntelligence(source.serverProjectId);
+      if (sourceRef.current !== source) return;
+      dispatch({
+        type: "intelligence/updated",
+        intelligence: data ? { status: "ready", data } : { status: "empty" },
+      });
+    } catch (error) {
+      if (sourceRef.current !== source) return;
+      dispatch({
+        type: "intelligence/updated",
+        intelligence: {
+          status: "error",
+          message: errorMessage(error, "Unable to load project intelligence."),
+        },
+      });
     }
   }, []);
 
@@ -254,8 +315,55 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       async closeProject() {
         if (!(await confirmDiscardAll())) return;
         sourceRef.current = null;
+        rememberServerProject(null);
         dispatch({ type: "project/closed" });
       },
+
+      async openServerProject(project) {
+        if (!(await confirmDiscardAll())) return;
+        await loadSource(new ServerProjectSource(project));
+      },
+
+      async restoreServerProject() {
+        const id = lastServerProject();
+        if (!id || sourceRef.current) return false;
+        try {
+          const project = await getProject(id);
+          if (sourceRef.current) return false;
+          await loadSource(new ServerProjectSource(project));
+          return true;
+        } catch (error) {
+          if (isApiError(error) && error.status === 404) rememberServerProject(null);
+          return false;
+        }
+      },
+
+      async analyzeServerProject() {
+        const source = sourceRef.current;
+        if (!source?.serverProjectId) return;
+        dispatch({ type: "intelligence/updated", intelligence: { status: "loading" } });
+        try {
+          const data = await analyzeProject(source.serverProjectId);
+          if (sourceRef.current !== source) return;
+          dispatch({ type: "intelligence/updated", intelligence: { status: "ready", data } });
+          // A rescan of a linked folder can add or remove files.
+          const listing = await source.list();
+          if (sourceRef.current === source) {
+            dispatch({ type: "project/entries-refreshed", entries: listing.entries });
+          }
+        } catch (error) {
+          if (sourceRef.current !== source) return;
+          dispatch({
+            type: "intelligence/updated",
+            intelligence: {
+              status: "error",
+              message: errorMessage(error, "Project analysis failed."),
+            },
+          });
+        }
+      },
+
+      loadIntelligence,
 
       openFile,
 
@@ -314,6 +422,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "diagnostics/replaced", source, path, diagnostics });
       },
 
+      setAnalysis(path, analysis) {
+        dispatch({ type: "analysis/updated", path, analysis });
+      },
+
       async revealPosition(path, line, column) {
         await openFile(path);
         revealNonce.current += 1;
@@ -323,7 +435,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         });
       },
     }),
-    [confirm, confirmDiscardAll, loadSource, openFile, saveFile],
+    [confirm, confirmDiscardAll, loadIntelligence, loadSource, openFile, saveFile],
   );
 
   const tree = useMemo(

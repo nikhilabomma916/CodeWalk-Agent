@@ -13,7 +13,7 @@ export const healthResponseSchema = z.object({
   checks: z.array(
     z.object({
       name: z.string(),
-      status: z.enum(["pass", "fail"]),
+      status: z.enum(["pass", "fail", "not_configured"]),
       required: z.boolean(),
       latency_ms: z.number(),
       detail: z.string().nullable().optional(),

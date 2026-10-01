@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import IntegrityError, InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.logging import request_id_var
@@ -58,6 +60,13 @@ class UnsafePathError(AppError):
 class ServiceUnavailableError(AppError):
     status_code = 503
     code = "service_unavailable"
+
+
+class DatabaseNotConfiguredError(ServiceUnavailableError):
+    code = "database_not_configured"
+
+    def __init__(self) -> None:
+        super().__init__("Persistence is not configured on this server (CODEWALK_DATABASE_URL is not set).")
 
 
 _HTTP_STATUS_CODES: dict[int, str] = {
@@ -134,6 +143,17 @@ async def _validation_error_handler(_: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _database_unavailable_handler(_: Request, exc: Exception) -> JSONResponse:
+    # Driver messages include host names and sometimes user names: log the type only.
+    logger.warning("Database unavailable: %s", type(exc).__name__)
+    return error_response(503, "database_unavailable", "The database is currently unavailable.")
+
+
+async def _integrity_error_handler(_: Request, exc: Exception) -> JSONResponse:
+    logger.info("Integrity error: %s", type(getattr(exc, "orig", exc)).__name__)
+    return error_response(409, "conflict", "The request conflicts with existing data.")
+
+
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled error while processing %s %s", request.method, request.url.path)
     return error_response(500, "internal_error", "An unexpected error occurred.")
@@ -143,4 +163,7 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(AppError, _app_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
+    for database_error in (OperationalError, InterfaceError, PoolTimeoutError):
+        app.add_exception_handler(database_error, _database_unavailable_handler)
+    app.add_exception_handler(IntegrityError, _integrity_error_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)

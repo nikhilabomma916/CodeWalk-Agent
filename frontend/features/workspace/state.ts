@@ -1,5 +1,7 @@
 import { ancestorPaths } from "@/lib/project-paths";
 import type { LanguageId } from "@/lib/languages";
+import type { AnalysisCapability, BackendLanguage } from "@/services/api/analysis";
+import type { ProjectIntelligence } from "@/services/api/intelligence";
 import type { Diagnostic } from "@/types/diagnostics";
 import type { ProjectEntry, ProjectPath } from "@/types/project";
 
@@ -11,9 +13,39 @@ export interface ProjectInfo {
   name: string;
   kind: ProjectSource["kind"];
   persistence: ProjectSource["persistence"];
+  readOnly: boolean;
+  /** Backend project id for server projects. */
+  serverProjectId?: string;
+  /** Folder linked on the server (server projects only). */
+  rootPath?: string;
   skippedEntries: number;
   truncated: boolean;
 }
+
+/** Real-time analysis state of one file (diagnostics live in `diagnostics`). */
+export type FileAnalysis =
+  | { status: "pending" | "running" }
+  | {
+      status: "done";
+      language: BackendLanguage;
+      success: boolean;
+      capabilities: AnalysisCapability[];
+      errors: string[];
+      durationMs: number;
+    }
+  /** The backend could not be reached; shown instead of stale results. */
+  | { status: "unavailable"; message: string }
+  | { status: "failed"; message: string };
+
+export type IntelligenceState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "empty" }
+  | { status: "ready"; data: ProjectIntelligence }
+  | { status: "error"; message: string };
+
+/** Producer key for backend analysis diagnostics. */
+export const ANALYSIS_SOURCE = "analysis";
 
 export type FileStatus = "loading" | "ready" | "error";
 
@@ -62,6 +94,8 @@ export interface WorkspaceState {
   activePath: ProjectPath | null;
   /** Keyed by producer ("typescript", "ruff", ...) then by file path. */
   diagnostics: Record<string, Record<ProjectPath, Diagnostic[]>>;
+  analysis: Record<ProjectPath, FileAnalysis>;
+  intelligence: IntelligenceState;
   editorSettings: EditorSettings;
   reveal: RevealRequest | null;
 }
@@ -77,6 +111,8 @@ export function createInitialState(
     openPaths: [],
     activePath: null,
     diagnostics: {},
+    analysis: {},
+    intelligence: { status: "idle" },
     editorSettings,
     reveal: null,
   };
@@ -87,6 +123,7 @@ export type WorkspaceAction =
   | { type: "project/loaded"; project: ProjectInfo; entries: ProjectEntry[] }
   | { type: "project/failed"; error: string }
   | { type: "project/closed" }
+  | { type: "project/entries-refreshed"; entries: ProjectEntry[] }
   | { type: "file/loading"; path: ProjectPath }
   | { type: "file/loaded"; path: ProjectPath; content: string }
   | { type: "file/load-failed"; path: ProjectPath; error: string }
@@ -101,7 +138,9 @@ export type WorkspaceAction =
   | { type: "tab/closed"; path: ProjectPath }
   | { type: "settings/changed"; settings: Partial<EditorSettings> }
   | { type: "diagnostics/replaced"; source: string; path: ProjectPath; diagnostics: Diagnostic[] }
-  | { type: "editor/reveal"; request: RevealRequest };
+  | { type: "editor/reveal"; request: RevealRequest }
+  | { type: "analysis/updated"; path: ProjectPath; analysis: FileAnalysis }
+  | { type: "intelligence/updated"; intelligence: IntelligenceState };
 
 export function isDirty(buffer: FileBuffer | undefined): boolean {
   return !!buffer && buffer.status === "ready" && buffer.content !== buffer.savedContent;
@@ -143,6 +182,9 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
 
     case "project/closed":
       return createInitialState(state.editorSettings);
+
+    case "project/entries-refreshed":
+      return { ...state, entries: action.entries };
 
     case "file/loading":
       return {
@@ -242,7 +284,15 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
       // Closing discards unsaved edits (the UI confirms first); the buffer is
       // dropped so that reopening reloads from the project source.
       const { [action.path]: _closed, ...buffers } = state.buffers;
-      return { ...state, openPaths, activePath, buffers };
+      const { [action.path]: _analysis, ...analysis } = state.analysis;
+      // Problems are shown for open files only.
+      const diagnostics = Object.fromEntries(
+        Object.entries(state.diagnostics).map(([source, byFile]) => {
+          const { [action.path]: _removed, ...rest } = byFile;
+          return [source, rest];
+        }),
+      );
+      return { ...state, openPaths, activePath, buffers, analysis, diagnostics };
     }
 
     case "settings/changed":
@@ -261,5 +311,11 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
 
     case "editor/reveal":
       return { ...state, reveal: action.request };
+
+    case "analysis/updated":
+      return { ...state, analysis: { ...state.analysis, [action.path]: action.analysis } };
+
+    case "intelligence/updated":
+      return { ...state, intelligence: action.intelligence };
   }
 }

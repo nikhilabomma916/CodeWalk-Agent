@@ -1,28 +1,34 @@
-export type DiagnosticSeverity = "error" | "warning" | "info" | "hint";
+export type DiagnosticSeverity = "error" | "warning" | "information" | "suggestion";
+
+export type DiagnosticCategory = "syntax" | "lint" | "style" | "type" | "semantic";
 
 /**
- * A single problem reported for a file. Producers (the editor's built-in
- * syntax checker today; the backend analysis engine later) all emit this shape.
- * Line and column are 1-based.
+ * A single problem reported for a file, as produced by the backend analysis
+ * engine. Line and column are 1-based; endColumn is exclusive.
  */
 export interface Diagnostic {
   id: string;
   severity: DiagnosticSeverity;
+  category: DiagnosticCategory;
   message: string;
   file: string;
   line: number;
   column: number;
-  endLine?: number;
-  endColumn?: number;
-  /** Which producer reported it, e.g. "typescript" or "ruff". */
+  endLine: number;
+  endColumn: number;
+  /** Which analyzer reported it, e.g. "ruff" or "typescript". */
   source: string;
   code?: string;
   suggestedAction?: string;
+  documentationUrl?: string;
+  fixable: boolean;
+  /** Code that is unused/unreachable (rendered faded in the editor). */
+  unnecessary: boolean;
 }
 
 export const SEVERITY_ORDER: Record<DiagnosticSeverity, number> = {
   error: 0,
   warning: 1,
-  info: 2,
-  hint: 3,
+  information: 2,
+  suggestion: 3,
 };

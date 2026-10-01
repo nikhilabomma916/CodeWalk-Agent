@@ -3,17 +3,21 @@ import type { ProjectEntry, ProjectPath } from "@/types/project";
 /**
  * Where a project's files come from and where saves go.
  *
- * The workspace talks only to this interface, so a backend-backed source
- * (project/file APIs) can be added without changing UI components.
+ * The workspace talks only to this interface: browser-local folders, in-memory
+ * projects, and server (database) projects are interchangeable for the UI.
  */
 export interface ProjectSource {
-  readonly kind: "memory" | "local-directory" | "local-snapshot";
+  readonly kind: "memory" | "local-directory" | "local-snapshot" | "server";
   readonly name: string;
   /**
    * Where saved changes end up. Shown to the user so it is always clear
-   * whether "Save" writes to disk or only to this browser tab.
+   * whether "Save" writes to disk, to the server, or only to this browser tab.
    */
-  readonly persistence: "disk" | "browser-memory";
+  readonly persistence: "disk" | "browser-memory" | "server";
+  /** True when files cannot be edited (server projects linked to a folder). */
+  readonly readOnly: boolean;
+  /** Set for projects stored by the backend. */
+  readonly serverProjectId?: string;
   list(): Promise<SourceListing>;
   read(path: ProjectPath): Promise<string>;
   write(path: ProjectPath, content: string): Promise<void>;
@@ -29,7 +33,7 @@ export interface SourceListing {
 }
 
 export type SourceErrorReason =
-  "binary" | "too-large" | "not-found" | "exists" | "permission" | "io";
+  "binary" | "too-large" | "not-found" | "exists" | "permission" | "io" | "read-only";
 
 export class SourceError extends Error {
   readonly reason: SourceErrorReason;

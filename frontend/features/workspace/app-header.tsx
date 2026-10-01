@@ -14,6 +14,10 @@ const SOURCE_BADGE = {
     label: "Local folder",
     title: "Opened from disk with write access; Save writes files to disk.",
   },
+  server: {
+    label: "Server",
+    title: "Stored in the CodeWalk database; Save sends changes to the server.",
+  },
   "local-snapshot": {
     label: "Read-only copy",
     title:

@@ -9,11 +9,12 @@ from pydantic import BaseModel, Field
 class CheckStatus(StrEnum):
     PASS = "pass"  # noqa: S105 - health status, not a password
     FAIL = "fail"
+    NOT_CONFIGURED = "not_configured"
 
 
 class OverallStatus(StrEnum):
     OK = "ok"
-    """Alive and every registered dependency check passed."""
+    """Alive and every configured dependency check passed."""
     DEGRADED = "degraded"
     """Alive, but an optional (non-required) dependency check failed."""
     UNAVAILABLE = "unavailable"

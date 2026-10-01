@@ -8,9 +8,8 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 
-from app.application import create_app
 from app.core.exceptions import NotFoundError
-from tests.conftest import FRONTEND_ORIGIN, make_settings
+from tests.conftest import FRONTEND_ORIGIN, build_app
 
 
 class ProbePayload(BaseModel):
@@ -24,7 +23,7 @@ def app_with_probe_routes(max_body_bytes: int = 1024) -> FastAPI:
     No public endpoint accepts a request body yet, so these routes stand in
     for future feature routes while using the production handlers/middleware.
     """
-    app = create_app(make_settings(max_request_body_bytes=max_body_bytes))
+    app = build_app(max_request_body_bytes=max_body_bytes)
     probe = APIRouter(prefix="/api/v1/_probe")
 
     @probe.post("/echo")

@@ -7,6 +7,7 @@ import { SourceError, type ProjectSource, type SourceListing } from "./types";
 export class MemoryProjectSource implements ProjectSource {
   readonly kind = "memory";
   readonly persistence = "browser-memory";
+  readonly readOnly = false;
   private readonly files = new Map<ProjectPath, string>();
 
   constructor(readonly name: string) {}

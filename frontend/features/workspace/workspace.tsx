@@ -8,11 +8,14 @@ import { useBackendHealth } from "@/features/backend-status/use-backend-health";
 import { CursorProvider } from "@/features/editor/cursor-context";
 import { EditorArea } from "@/features/editor/editor-area";
 import { ProjectExplorer } from "@/features/explorer/project-explorer";
-import { ProblemsPanel } from "@/features/problems/problems-panel";
 import { StatusBar } from "@/features/status-bar/status-bar";
+import { isApiError } from "@/services/api/errors";
+import { createProject } from "@/services/api/projects";
 
 import { AppHeader } from "./app-header";
-import { NewProjectDialog } from "./new-project-dialog";
+import { BottomPanel } from "./bottom-panel";
+import { NewProjectDialog, type NewProjectRequest } from "./new-project-dialog";
+import { serverAvailability, useServerProjects } from "./use-server-projects";
 import { Welcome } from "./welcome";
 import { useWorkspace, WorkspaceProvider } from "./workspace-context";
 
@@ -40,6 +43,41 @@ function WorkspaceLayout() {
   const [problemsOpen, setProblemsOpen] = useState(true);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const hasProject = state.project !== null;
+  const availability = serverAvailability(connection);
+  const { state: serverProjects, refresh: refreshServerProjects } = useServerProjects(availability);
+  const workspaceFolders =
+    serverProjects.status === "ready" && serverProjects.workspace.enabled
+      ? serverProjects.workspace.folders
+      : null;
+
+  // After a page reload, reopen the server project that was open before.
+  const restoreAttempted = useRef(false);
+  useEffect(() => {
+    if (!availability.available || restoreAttempted.current) return;
+    restoreAttempted.current = true;
+    void actions.restoreServerProject();
+  }, [actions, availability.available]);
+
+  const handleCreate = useCallback(
+    async (request: NewProjectRequest): Promise<string | null> => {
+      if (request.storage === "browser") {
+        setNewProjectOpen(false);
+        await actions.createProject(request.name);
+        return null;
+      }
+      try {
+        const project = await createProject({ name: request.name, rootPath: request.rootPath });
+        setNewProjectOpen(false);
+        await actions.openServerProject(project);
+        if (project.root_path) await actions.analyzeServerProject(); // import the linked folder
+        void refreshServerProjects();
+        return null;
+      } catch (error) {
+        return isApiError(error) ? error.message : "The project could not be created.";
+      }
+    },
+    [actions, refreshServerProjects],
+  );
 
   // `webkitdirectory` is not in React's input typings; set it on the element.
   useEffect(() => {
@@ -131,13 +169,18 @@ function WorkspaceLayout() {
                   maxSize="70%"
                   onResize={(size) => setProblemsOpen(size.inPixels > 0)}
                 >
-                  {problemsOpen && <ProblemsPanel onClose={toggleProblems} />}
+                  {problemsOpen && <BottomPanel onClose={toggleProblems} />}
                 </Panel>
               </Group>
             </Panel>
           </Group>
         ) : (
-          <Welcome onNewProject={() => setNewProjectOpen(true)} onOpenFolder={openFolder} />
+          <Welcome
+            onNewProject={() => setNewProjectOpen(true)}
+            onOpenFolder={openFolder}
+            serverProjects={serverProjects}
+            onRefreshServerProjects={() => void refreshServerProjects()}
+          />
         )}
       </main>
 
@@ -149,11 +192,10 @@ function WorkspaceLayout() {
 
       <NewProjectDialog
         open={newProjectOpen}
+        server={availability}
+        workspaceFolders={workspaceFolders}
         onClose={() => setNewProjectOpen(false)}
-        onCreate={(name) => {
-          setNewProjectOpen(false);
-          void actions.createProject(name);
-        }}
+        onCreate={handleCreate}
       />
       <input
         ref={folderInputRef}

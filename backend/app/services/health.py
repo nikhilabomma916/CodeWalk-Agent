@@ -24,6 +24,13 @@ class HealthCheckFailedError(Exception):
     """Raised by a check to report a client-safe failure reason."""
 
 
+class HealthCheckNotConfiguredError(Exception):
+    """Raised by a check whose dependency is intentionally not configured.
+
+    Reported as ``not_configured``; it neither passes nor degrades the service.
+    """
+
+
 class HealthCheck(Protocol):
     name: str
     required: bool
@@ -73,6 +80,8 @@ class HealthService:
             await asyncio.wait_for(check.check(), timeout=self._timeout)
         except TimeoutError:
             status, detail = CheckStatus.FAIL, f"Timed out after {self._timeout:g}s"
+        except HealthCheckNotConfiguredError as exc:
+            status, detail = CheckStatus.NOT_CONFIGURED, str(exc) or "Not configured"
         except HealthCheckFailedError as exc:
             status, detail = CheckStatus.FAIL, str(exc) or "Check failed"
         except Exception:

@@ -4,10 +4,23 @@ version = "0.1.0"
 description = "FastAPI backend for CodeWalk Agent"
 requires-python = ">=3.12"
 dependencies = [
+    "alembic>=1.20.0",
     "fastapi>=0.142.2",
     "httpx>=0.28.1",
+    "pathspec>=1.1.1",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.13.5",
     "pydantic-settings>=2.15.0",
+    "ruff>=0.16.9",
+    "sqlalchemy>=2.0",
+    "sqlglot>=30.21.0",
+    "tree-sitter>=0.26.0",
+    "tree-sitter-c>=0.24.2",
+    "tree-sitter-cpp>=0.23.4",
+    "tree-sitter-css>=0.25.0",
+    "tree-sitter-java>=0.23.5",
+    "tree-sitter-javascript>=0.25.0",
+    "tree-sitter-typescript>=0.23.2",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -32,6 +45,10 @@ filterwarnings = ["error"]
 line-length = 110
 target-version = "py312"
 src = ["."]
+extend-exclude = ["tools"]
+
+[tool.ruff.format]
+line-ending = "lf"
 
 [tool.ruff.lint.isort]
 known-first-party = ["app", "tests"]

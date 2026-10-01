@@ -1,21 +1,13 @@
 "use client";
 
-import { AlertTriangle, CircleX, Info, Lightbulb, X } from "lucide-react";
-import { memo, useMemo } from "react";
+import { useMemo } from "react";
 
-import { IconButton } from "@/components/ui/icon-button";
+import type { FileAnalysis } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
-import { SEVERITY_ORDER, type Diagnostic, type DiagnosticSeverity } from "@/types/diagnostics";
+import type { AnalysisCapability } from "@/services/api/analysis";
+import { SEVERITY_ORDER, type Diagnostic } from "@/types/diagnostics";
 
-const SEVERITY_ICON: Record<
-  DiagnosticSeverity,
-  { icon: typeof CircleX; className: string; label: string }
-> = {
-  error: { icon: CircleX, className: "text-danger", label: "Error" },
-  warning: { icon: AlertTriangle, className: "text-warning", label: "Warning" },
-  info: { icon: Info, className: "text-info", label: "Info" },
-  hint: { icon: Lightbulb, className: "text-fg-muted", label: "Hint" },
-};
+import { ProblemsList } from "./problems-list";
 
 export interface DiagnosticCounts {
   error: number;
@@ -46,75 +38,64 @@ export function useAllDiagnostics(): { diagnostics: Diagnostic[]; counts: Diagno
   }, [state.diagnostics]);
 }
 
-const ProblemRow = memo(function ProblemRow({
-  diagnostic,
-  onSelect,
-}: {
-  diagnostic: Diagnostic;
-  onSelect(diagnostic: Diagnostic): void;
-}) {
-  const severity = SEVERITY_ICON[diagnostic.severity];
-  const Icon = severity.icon;
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={() => onSelect(diagnostic)}
-        className="flex w-full items-start gap-2 px-3 py-1 text-left text-xs hover:bg-surface-hover"
-      >
-        <Icon
-          aria-label={severity.label}
-          className={`mt-px size-3.5 shrink-0 ${severity.className}`}
-        />
-        <span className="min-w-0 flex-1">
-          <span className="text-fg">{diagnostic.message}</span>
-          {diagnostic.suggestedAction && (
-            <span className="block text-fg-muted">{diagnostic.suggestedAction}</span>
-          )}
-        </span>
-        <span className="shrink-0 text-fg-subtle">
-          {diagnostic.source}
-          {diagnostic.code ? `(${diagnostic.code})` : ""}
-        </span>
-        <span className="shrink-0 font-mono text-fg-muted">
-          {diagnostic.file}:{diagnostic.line}:{diagnostic.column}
-        </span>
-      </button>
-    </li>
-  );
-});
+const CAPABILITY_MARK: Record<AnalysisCapability["status"], string> = {
+  performed: "✓",
+  skipped: "skipped",
+  unavailable: "unavailable",
+  not_supported: "—",
+};
 
-export function ProblemsPanel({ onClose }: { onClose(): void }) {
-  const { actions } = useWorkspace();
+/** One line stating exactly what was analyzed for the active file. */
+export function describeAnalysis(analysis: FileAnalysis | undefined): string {
+  if (!analysis) return "Not analyzed yet.";
+  switch (analysis.status) {
+    case "pending":
+      return "Waiting for you to pause typing…";
+    case "running":
+      return "Analyzing…";
+    case "unavailable":
+      return `Analysis unavailable: ${analysis.message}`;
+    case "failed":
+      return `Analysis failed: ${analysis.message}`;
+    case "done": {
+      const performed = analysis.capabilities.some((c) => c.status === "performed");
+      if (!performed) return `No analyzer is available for ${analysis.language}.`;
+      const parts = analysis.capabilities.map((c) => `${c.kind} ${CAPABILITY_MARK[c.status]}`);
+      const errors = analysis.errors.length ? ` · ${analysis.errors.join("; ")}` : "";
+      return `${analysis.language}: ${parts.join(" · ")} (${Math.round(analysis.durationMs)} ms)${errors}`;
+    }
+  }
+}
+
+export function ProblemsPanel() {
+  const { state, actions } = useWorkspace();
   const { diagnostics, counts } = useAllDiagnostics();
+  const active = state.activePath ? state.analysis[state.activePath] : undefined;
 
   const select = (diagnostic: Diagnostic) =>
     void actions.revealPosition(diagnostic.file, diagnostic.line, diagnostic.column);
 
   return (
-    <section aria-label="Problems" className="flex h-full min-h-0 flex-col bg-surface-sunken">
-      <header className="flex h-8 shrink-0 items-center gap-3 border-b border-border pr-1 pl-3">
-        <h2 className="text-[11px] font-semibold tracking-wider text-fg uppercase">Problems</h2>
-        <span className="text-[11px] text-fg-muted">
+    <section aria-label="Problems" className="flex h-full min-h-0 flex-col">
+      <p className="flex shrink-0 flex-wrap gap-x-3 border-b border-border px-3 py-1 text-[11px] text-fg-muted">
+        <span>
           {counts.error} errors · {counts.warning} warnings
-          {counts.other ? ` · ${counts.other} other` : ""}
+          {counts.other ? ` · ${counts.other} info/suggestions` : ""}
         </span>
-        <span className="flex-1" />
-        <IconButton label="Close panel" shortcut="Ctrl+J" onClick={onClose}>
-          <X aria-hidden className="size-4" />
-        </IconButton>
-      </header>
+        {state.activePath && (
+          <span className="truncate text-fg-subtle" title={describeAnalysis(active)}>
+            {describeAnalysis(active)}
+          </span>
+        )}
+      </p>
       {diagnostics.length === 0 ? (
         <p role="status" className="px-3 py-2 text-xs text-fg-muted">
-          No problems reported. Problems currently come from the editor&apos;s built-in syntax
-          checking of open files.
+          {state.openPaths.length === 0
+            ? "Open a file to analyze it."
+            : "No problems reported for open files."}
         </p>
       ) : (
-        <ul className="min-h-0 flex-1 overflow-auto py-1">
-          {diagnostics.map((diagnostic) => (
-            <ProblemRow key={diagnostic.id} diagnostic={diagnostic} onSelect={select} />
-          ))}
-        </ul>
+        <ProblemsList diagnostics={diagnostics} onSelect={select} />
       )}
     </section>
   );

@@ -1,7 +1,7 @@
 # Architecture
 
-This document describes the architecture established in Batch 1 (Modules 1–3) and where later
-modules plug in.
+This document describes the architecture of Batch 1 (Modules 1–3: foundation, editor, API) and Batch 2
+(Modules 4–6: code analysis, project intelligence, persistence), and where later modules plug in.
 
 ## Layers
 
@@ -13,9 +13,10 @@ Frontend (Next.js)
         │  HTTP, JSON, /api/v1
 Backend (FastAPI)
   api/routes           HTTP concerns only: parse, call a service, return a schema
-  api/deps.py          dependency providers (settings, services; DB sessions/repositories later)
+  api/deps.py          dependency providers (settings, DB session, services)
   services             business logic, framework-agnostic
-  repositories         data access (arrives with Module 8; services will receive repositories via deps)
+  repositories         data access over a SQLAlchemy Session; flush, never commit (services own transactions)
+  db                   declarative models, engine/session (app/db), Alembic migrations (backend/migrations)
   integrations         external services behind typed, failure-mapped clients
   core                 configuration, logging, exceptions, middleware
 ```
@@ -42,9 +43,10 @@ The workspace talks only to the `ProjectSource` interface (`features/workspace/s
 | `MemoryProjectSource` | "New project" | browser memory (lost on reload) |
 | `LocalDirectorySource` | File System Access API (Chromium) | the real file on disk |
 | `LocalSnapshotSource` | `<input webkitdirectory>` fallback | browser memory (originals untouched) |
+| `ServerProjectSource` | Welcome → "Server projects", or New project → "Server" (PostgreSQL) | `PATCH /projects/{id}/files/{file}` |
 
-The server-side project/file APIs (Module 7) will add a backend-backed `ProjectSource`, so UI
-components will not need to change. Every source applies the same ignore rules
+Server projects are listed with `use-server-projects.ts`. Folder-linked server projects are read-only in
+the editor. Every source applies the same ignore rules
 (`lib/project-paths.ts`), skips `.env` files, refuses binary or non-UTF-8 files, and caps file size
 and entry count.
 
@@ -52,10 +54,17 @@ and entry count.
 
 `types/diagnostics.ts` defines the `Diagnostic` shape: severity, message, file, line, column,
 source, code, and suggested action. The shape matches the target backend analysis response. Diagnostics
-are stored per *producer* (`state.diagnostics[source][file]`). The only producer today is Monaco's
-built-in syntax validation (semantic TypeScript checks are disabled because the editor has no
-project type information). Module 5 adds the backend analysis engine as a second producer.
-The Problems panel and status bar already aggregate all producers.
+are stored per *producer* (`state.diagnostics[source][file]`). There are two producers: Monaco's
+built-in syntax validation, and the backend analysis engine.
+
+`features/analysis/live-analysis.ts` drives backend analysis for the active file. Each edit restarts a
+450 ms debounce timer and aborts the in-flight request. A sequence token also discards any late
+response for older content, even if the server ignores the abort. Results become Monaco markers
+(`setModelMarkers`) and Problems-panel rows. Clicking a row reveals the location in the editor.
+
+The intelligence panel (`features/intelligence`) runs `POST /projects/{id}/analyze` for server
+projects. It shows statistics, per-file symbols and imports, and parse errors. Clicking a symbol
+opens the file at its line.
 
 ### API client
 
@@ -85,9 +94,69 @@ with a stack trace server-side and returned as a generic `internal_error`.
 ### Health
 
 `HealthService` runs registered `HealthCheck`s concurrently, each with a timeout. Required failures
-produce `unavailable` (HTTP 503). Optional failures produce `degraded`. No checks are registered yet,
-so the database and AI provider are **absent** from the report rather than claimed healthy. Their
-modules will register checks.
+produce `unavailable` (HTTP 503). Optional failures produce `degraded`. The `database` check (a real
+`SELECT 1`) is registered and optional: when PostgreSQL is down the API reports `degraded` and keeps
+serving code analysis. The AI provider is absent from the report until its module registers a check.
+
+### Code analysis (Module 4)
+
+`services/analysis/engine.py` resolves the language (explicit or from the file path), runs every
+analyzer registered for it in `AnalyzerRegistry`, and normalizes the output into one `AnalysisResult`.
+Diagnostics are sorted by position and severity and capped. Analyzers implement the `Analyzer`
+protocol (`analyzers/base.py`). A new language needs a new analyzer class and one line in
+`AnalysisEngine.create_default`. An analyzer that crashes becomes an entry in `errors` and does not
+fail the request. Each result declares its `capabilities`, so clients know whether, for example,
+type checking actually ran.
+
+Source code is **never executed**. Python is parsed with `ast.parse` and linted by Ruff via stdin.
+TypeScript/JavaScript go to a long-lived Node worker that uses the TypeScript compiler API without
+resolving imports or emitting output (`tools/typescript-analyzer`). Other languages use pure parsers
+(tree-sitter, sqlglot, the standard library). Every subprocess has a timeout.
+
+### Project intelligence (Module 5)
+
+`services/project_intelligence/`:
+
+- `scanner.py`: recursive scan of a linked folder. It never follows symlinks or junctions, never
+  opens secret files (`.env*`, keys), skips dependency/build directories (`node_modules`, `.venv`,
+  `dist`, …) and honours nested `.gitignore` files. It caps file count and size, and detects binary
+  files.
+- `python_structure.py`: symbols (classes, methods, functions, variables) and imports from the AST.
+- `javascript_structure.py`: the same for JS/TS/JSX/TSX from tree-sitter parse trees.
+- `relationships.py`: resolves imports to project files (Python packages, relative and absolute
+  modules; JS relative paths and the nearest tsconfig/jsconfig `baseUrl`/`paths`, with extension and
+  `index` resolution). Anything else is marked external.
+- `project_analyzer.py`: combines the above into `ProjectAnalysisResult` with statistics. A file
+  that fails to parse is reported in `errors` and does not stop the analysis.
+- `service.py`: persistence-aware orchestration. It syncs scanned files into the database
+  (create/update/delete by content hash) and caches each file's structure in `files.structure`
+  keyed by content hash and `STRUCTURE_VERSION`. It records an `analyses` row of type
+  `project_intelligence`.
+
+### Persistence (Module 6)
+
+PostgreSQL 17 via SQLAlchemy 2 (sync, psycopg 3) and Alembic. Request flow: route → service
+(business rules, transaction boundary) → repository (queries, `flush` only) → session.
+
+| Table | Key columns | Notes |
+| --- | --- | --- |
+| `projects` | `id` UUID, `name`, `description`, `root_path`, timestamps | unique index on `lower(name)` |
+| `files` | `id`, `project_id` → projects (CASCADE), `path`, `language`, `content`, `size`, `line_count`, `content_hash`, `structure` JSONB, timestamps | unique `(project_id, path)` |
+| `analyses` | `id`, `project_id` (CASCADE), `file_id` (SET NULL), `analysis_type`, `status`, `duration_ms`, `diagnostic_count`, `details` JSONB, `created_at` | indexes on `(project_id, created_at)`, `(file_id, created_at)` |
+| `diagnostics` | `id`, `analysis_id` (CASCADE), severity, category, message, rule, range, suggestion | CHECK constraints on enums |
+
+- Enums are `VARCHAR` + `CHECK` (not native PG enums), so adding values is a plain migration.
+  Constraint names follow a fixed naming convention, so autogenerated migrations are stable.
+- The engine is created lazily (`pool_pre_ping`, `pool_recycle`, connect timeout). The API starts
+  without a database. Driver connection errors map to 503 `database_unavailable` and are logged by
+  type only, so host names and credentials never reach clients or logs.
+- Performance: file listings defer `content` and `structure`, history is pruned per file, project
+  structure is cached per content hash, and rescans touch only changed files.
+- Editor (live) analysis is not stored. Analyses are recorded when file content is saved through the
+  API or on explicit request.
+- Migrations: `npm run db:migrate` (`alembic upgrade head`). The URL comes from
+  `CODEWALK_DATABASE_URL`, never from `alembic.ini`. The PostgreSQL test suite (`backend/tests/db`)
+  builds its schema with these same migrations, and checks that the models and migrations do not drift.
 
 ### Security foundations
 
@@ -95,7 +164,9 @@ modules will register checks.
 - Secrets are `SecretStr`, so they never appear in reprs, logs, or responses.
 - Request bodies are limited, whether declared by `Content-Length` or streamed.
 - `utils/paths.resolve_within` rejects traversal, absolute and drive paths, NUL bytes, and symlink
-  escapes. Module 7's file APIs must use it.
+  escapes. Project linking and scanning use it, and scanning is confined to `CODEWALK_WORKSPACE_ROOT`.
+- All SQL goes through SQLAlchemy bound parameters. Stored file paths are validated as relative POSIX
+  paths.
 - `integrations/http_client.ExternalHTTPClient` maps timeouts, connection errors, HTTP errors, and
   malformed bodies to typed exceptions, so an external outage cannot crash a request.
 - User code is never executed.

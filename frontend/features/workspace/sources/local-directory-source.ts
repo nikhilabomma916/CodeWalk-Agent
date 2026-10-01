@@ -28,6 +28,7 @@ function toSourceError(error: unknown, path: string): SourceError {
 export class LocalDirectorySource implements ProjectSource {
   readonly kind = "local-directory";
   readonly persistence = "disk";
+  readonly readOnly = false;
   readonly name: string;
 
   constructor(private readonly root: FileSystemDirectoryHandle) {
