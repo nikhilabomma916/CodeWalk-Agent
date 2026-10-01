@@ -126,10 +126,8 @@ def test_linking_rejects_traversal_and_missing_folders(api: TestClient) -> None:
     assert missing.json()["error"]["code"] == "folder_not_found"
 
 
-def test_linking_requires_a_workspace(
-    database_url: str, client_factory: Callable[[FastAPI], TestClient]
-) -> None:
-    api = client_factory(build_app(database_url=database_url))
+def test_linking_requires_a_workspace(database_url: str, signed_in: Callable[[FastAPI], TestClient]) -> None:
+    api = signed_in(build_app(database_url=database_url))
     assert api.get("/api/v1/projects/workspace").json() == {"enabled": False, "folders": []}
     response = api.post("/api/v1/projects", json={"name": "x", "root_path": "anything"})
     assert response.status_code == 400

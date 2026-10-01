@@ -5,13 +5,13 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.common import DisplayName, ProjectFilePath, RelativePath
+from app.schemas.common import ProjectFilePath, ProjectName, RelativePath
 
 
 class ProjectCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: DisplayName
+    name: ProjectName
     description: str | None = Field(default=None, max_length=2000)
     root_path: RelativePath | None = Field(
         default=None,
@@ -25,8 +25,23 @@ class ProjectCreate(BaseModel):
 class ProjectUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    name: DisplayName | None = None
+    name: ProjectName | None = None
     description: str | None = Field(default=None, max_length=2000)
+
+
+class LanguageCount(BaseModel):
+    language: str
+    files: int
+
+
+class ProjectStats(BaseModel):
+    """Computed from the stored files and analyses (no analysis is run to produce it)."""
+
+    file_count: int
+    total_bytes: int
+    total_lines: int
+    languages: list[LanguageCount] = Field(description="Files per language, most common first.")
+    last_analyzed_at: datetime | None = Field(description="When project intelligence last ran.")
 
 
 class ProjectResponse(BaseModel):
@@ -39,6 +54,7 @@ class ProjectResponse(BaseModel):
     read_only: bool = Field(description="True for folder-linked projects (files come from scanning).")
     created_at: datetime
     updated_at: datetime
+    stats: ProjectStats
 
 
 class FileCreate(BaseModel):
@@ -73,6 +89,22 @@ class FileMetadata(BaseModel):
 
 class FileDetail(FileMetadata):
     content: str | None
+
+
+class FileVersionSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    version: int = Field(description="1 for the first saved content, increasing by one per change.")
+    size: int
+    line_count: int
+    content_hash: str
+    source: str = Field(description="create | edit | restore | scan (folder rescan)")
+    author_id: uuid.UUID | None
+    created_at: datetime
+
+
+class FileVersionDetail(FileVersionSummary):
+    content: str
 
 
 class WorkspaceInfo(BaseModel):

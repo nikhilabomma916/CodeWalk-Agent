@@ -1,13 +1,16 @@
-"""Persistence model: projects, files, analyses, diagnostics."""
+"""Persistence model: users and login sessions, projects, files and their versions,
+analyses, diagnostics, and the per-user activity history."""
 
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    DateTime,
     Enum,
     ForeignKey,
     Index,
@@ -16,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -50,9 +54,55 @@ def _enum(enum_class: type[StrEnum], name: str) -> Enum:
     )
 
 
+class FileVersionSource(StrEnum):
+    CREATE = "create"
+    EDIT = "edit"
+    RESTORE = "restore"
+    SCAN = "scan"
+
+
+class ActivityType(StrEnum):
+    PROJECT_CREATED = "project.created"
+    PROJECT_UPDATED = "project.updated"
+    PROJECT_DELETED = "project.deleted"
+    PROJECT_ANALYZED = "project.analyzed"
+    FILE_CREATED = "file.created"
+    FILE_UPDATED = "file.updated"
+    FILE_RESTORED = "file.restored"
+    FILE_DELETED = "file.deleted"
+    FILE_ANALYZED = "file.analyzed"
+
+
+class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "users"
+
+    # Stored lower-cased; unique.
+    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Argon2id hash (includes its own salt and parameters).
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Inactive accounts cannot sign in and their existing sessions stop working.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=true())
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AuthSession(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    __tablename__ = "auth_sessions"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # SHA-256 of the cookie token: a database leak does not reveal usable tokens.
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+    user: Mapped[User] = relationship()
+
+
 class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "projects"
 
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
     # Folder relative to CODEWALK_WORKSPACE_ROOT when the project is linked to a
@@ -64,8 +114,8 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     __table_args__ = (
-        # Project names are unique regardless of letter case.
-        Index("uq_projects_lower_name", func.lower(name), unique=True),
+        # Each user's project names are unique regardless of letter case.
+        Index("uq_projects_owner_id_lower_name", owner_id, func.lower(name), unique=True),
     )
 
 
@@ -87,8 +137,33 @@ class ProjectFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     structure: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     project: Mapped[Project] = relationship(back_populates="files")
+    versions: Mapped[list[FileVersion]] = relationship(
+        back_populates="file", cascade="all, delete-orphan", passive_deletes=True
+    )
 
     __table_args__ = (UniqueConstraint("project_id", "path", name="uq_files_project_id_path"),)
+
+
+class FileVersion(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """A saved state of a file's content. Version numbers start at 1 per file."""
+
+    __tablename__ = "file_versions"
+
+    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    size: Mapped[int] = mapped_column(Integer, nullable=False)
+    line_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    source: Mapped[FileVersionSource] = mapped_column(
+        _enum(FileVersionSource, "file_version_source"), nullable=False
+    )
+    # Who saved it; None for folder rescans or when the user was deleted.
+    author_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+
+    file: Mapped[ProjectFile] = relationship(back_populates="versions")
+
+    __table_args__ = (UniqueConstraint("file_id", "version", name="uq_file_versions_file_id_version"),)
 
 
 class Analysis(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
@@ -140,3 +215,29 @@ class DiagnosticRecord(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     fixable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     analysis: Mapped[Analysis] = relationship(back_populates="diagnostics")
+
+
+class ActivityEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """Something a user did, recorded in the same transaction as the action itself.
+
+    Project name and file path are copied at the time of the event, so entries stay
+    readable after a rename or delete; the foreign keys become NULL when the target
+    is deleted (or, for analyses, pruned).
+    """
+
+    __tablename__ = "activity_events"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    event_type: Mapped[ActivityType] = mapped_column(_enum(ActivityType, "activity_type"), nullable=False)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("projects.id", ondelete="SET NULL"))
+    project_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    file_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("files.id", ondelete="SET NULL"))
+    file_path: Mapped[str | None] = mapped_column(String(MAX_PATH_LENGTH))
+    analysis_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("analyses.id", ondelete="SET NULL"))
+    # Small structured summary (diagnostic counts, version number, changed fields, ...).
+    details: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_activity_events_user_id_created_at", "user_id", "created_at"),
+        Index("ix_activity_events_project_id_created_at", "project_id", "created_at"),
+    )

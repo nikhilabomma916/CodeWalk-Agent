@@ -15,6 +15,7 @@ const project = {
   read_only: false,
   created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z",
+  stats: { file_count: 1, total_bytes: 8, total_lines: 1, languages: [], last_analyzed_at: null },
 };
 
 function file(id: string, path: string) {

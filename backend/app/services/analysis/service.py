@@ -15,8 +15,18 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
-from app.db.models import Analysis, AnalysisStatus, AnalysisType, DiagnosticRecord, ProjectFile
+from app.db.models import (
+    ActivityType,
+    Analysis,
+    AnalysisStatus,
+    AnalysisType,
+    DiagnosticRecord,
+    ProjectFile,
+    User,
+)
 from app.repositories.analyses import AnalysisRepository, DiagnosticRepository
+from app.repositories.projects import ProjectRepository
+from app.services.activity import ActivityRecorder
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.models import AnalysisResult
 
@@ -27,8 +37,9 @@ class FileNotAnalyzableError(AppError):
 
 
 class AnalysisService:
-    def __init__(self, session: Session, engine: AnalysisEngine, settings: Settings) -> None:
+    def __init__(self, session: Session, engine: AnalysisEngine, settings: Settings, owner: User) -> None:
         self.session = session
+        self.owner = owner
         self.engine = engine
         self.settings = settings
         self.analyses = AnalysisRepository(session)
@@ -63,12 +74,19 @@ class AnalysisService:
     def analyze_stored_file(self, file: ProjectFile) -> tuple[Analysis, Sequence[DiagnosticRecord]]:
         """Explicit (manual) analysis of a stored file, committed immediately."""
         analysis, _ = self.record_file_analysis(file)
+        ActivityRecorder(self.session, self.owner).record(
+            ActivityType.FILE_ANALYZED, file.project, file=file, analysis=analysis
+        )
         self.session.commit()
         return analysis, self.diagnostics.list_by_analysis(analysis.id)
 
     def get(self, analysis_id: uuid.UUID) -> tuple[Analysis, Sequence[DiagnosticRecord]]:
         analysis = self.analyses.get(analysis_id)
-        if analysis is None:
+        # Another user's analysis is indistinguishable from a missing one.
+        if (
+            analysis is None
+            or ProjectRepository(self.session).get(self.owner.id, analysis.project_id) is None
+        ):
             raise NotFoundError("Analysis not found.", code="analysis_not_found")
         return analysis, self.diagnostics.list_by_analysis(analysis.id)
 

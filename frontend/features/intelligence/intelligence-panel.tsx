@@ -5,9 +5,10 @@ import { useEffect, useMemo, type ReactNode } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
 import { useWorkspace } from "@/features/workspace/workspace-context";
+import { formatBytes } from "@/lib/format";
 import type { IntelligenceSymbol, ProjectIntelligence } from "@/services/api/intelligence";
 
-const KIND_LABEL: Record<IntelligenceSymbol["kind"], string> = {
+export const KIND_LABEL: Record<IntelligenceSymbol["kind"], string> = {
   class: "class",
   function: "fn",
   method: "method",
@@ -16,12 +17,6 @@ const KIND_LABEL: Record<IntelligenceSymbol["kind"], string> = {
   enum: "enum",
   variable: "var",
 };
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (

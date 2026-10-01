@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, Path, Query, Response, status
 from pydantic import BaseModel
 
 from app.api.deps import AnalysisServiceDep, FileServiceDep
@@ -11,12 +11,20 @@ from app.db.models import Analysis, ProjectFile
 from app.schemas.analysis import AnalysisRecord, AnalysisRecordDetail
 from app.schemas.common import Page
 from app.schemas.errors import ErrorResponse
-from app.schemas.projects import FileCreate, FileDetail, FileMetadata, FileUpdate
+from app.schemas.projects import (
+    FileCreate,
+    FileDetail,
+    FileMetadata,
+    FileUpdate,
+    FileVersionDetail,
+    FileVersionSummary,
+)
 
 router = APIRouter(
     prefix="/projects/{project_id}/files",
     tags=["files"],
     responses={
+        401: {"model": ErrorResponse, "description": "Not signed in."},
         404: {"model": ErrorResponse, "description": "Project or file not found."},
         409: {"model": ErrorResponse, "description": "Path exists, or the project is read-only."},
         413: {"model": ErrorResponse, "description": "Content exceeds CODEWALK_MAX_SOURCE_BYTES."},
@@ -106,3 +114,42 @@ def analyze_file(
     project_id: uuid.UUID, file_id: uuid.UUID, files: FileServiceDep, analyses: AnalysisServiceDep
 ) -> AnalysisRecordDetail:
     return AnalysisRecordDetail.build(*analyses.analyze_stored_file(files.get(project_id, file_id)))
+
+
+@router.get(
+    "/{file_id}/versions",
+    response_model=Page[FileVersionSummary],
+    summary="Saved versions of a file (newest first, without content)",
+)
+def list_versions(
+    project_id: uuid.UUID,
+    file_id: uuid.UUID,
+    service: FileServiceDep,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Page[FileVersionSummary]:
+    items, total = service.list_versions(project_id, file_id, limit=limit, offset=offset)
+    return Page(
+        items=[FileVersionSummary.model_validate(v) for v in items], total=total, limit=limit, offset=offset
+    )
+
+
+@router.get(
+    "/{file_id}/versions/{version}", response_model=FileVersionDetail, summary="One version with content"
+)
+def get_version(
+    project_id: uuid.UUID, file_id: uuid.UUID, version: Annotated[int, Path(ge=1)], service: FileServiceDep
+) -> FileVersionDetail:
+    return FileVersionDetail.model_validate(service.get_version(project_id, file_id, version))
+
+
+@router.post(
+    "/{file_id}/versions/{version}/restore",
+    response_model=FileSaveResponse,
+    summary="Make an earlier version the current content",
+    description="Saved as a new version (so a restore can itself be undone) and analyzed like any save.",
+)
+def restore_version(
+    project_id: uuid.UUID, file_id: uuid.UUID, version: Annotated[int, Path(ge=1)], service: FileServiceDep
+) -> FileSaveResponse:
+    return _saved(*service.restore_version(project_id, file_id, version))

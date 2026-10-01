@@ -1,5 +1,9 @@
-import { Workspace } from "@/features/workspace/workspace";
+import { RootRedirect } from "@/features/auth/root-redirect";
 
 export default function HomePage() {
-  return <Workspace />;
+  return (
+    <main className="h-dvh">
+      <RootRedirect />
+    </main>
+  );
 }

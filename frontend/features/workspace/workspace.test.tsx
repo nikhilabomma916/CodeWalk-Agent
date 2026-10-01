@@ -2,7 +2,15 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { Workspace } from "./workspace";
+import { CodingWorkspace, WorkspaceProviders } from "./workspace";
+
+function Workspace() {
+  return (
+    <WorkspaceProviders>
+      <CodingWorkspace />
+    </WorkspaceProviders>
+  );
+}
 
 const healthyBody = {
   status: "ok",
@@ -101,6 +109,13 @@ describe("Workspace server projects", () => {
                 read_only: false,
                 created_at: "2026-10-01T00:00:00Z",
                 updated_at: "2026-10-01T00:00:00Z",
+                stats: {
+                  file_count: 3,
+                  total_bytes: 120,
+                  total_lines: 9,
+                  languages: [{ language: "python", files: 3 }],
+                  last_analyzed_at: null,
+                },
               },
             ],
             total: 1,

@@ -42,6 +42,19 @@ export interface ApiClient {
   request<T>(path: string, options: RequestOptions<T>): Promise<ApiResponse<T>>;
 }
 
+type SessionEndedListener = () => void;
+const sessionEndedListeners = new Set<SessionEndedListener>();
+
+/**
+ * Called whenever the backend rejects a request because the session is missing
+ * or expired (HTTP 401 `not_authenticated`). The auth state uses this to sign
+ * the user out of the UI wherever the request came from.
+ */
+export function onSessionEnded(listener: SessionEndedListener): () => void {
+  sessionEndedListeners.add(listener);
+  return () => sessionEndedListeners.delete(listener);
+}
+
 export function createApiClient(
   baseUrl: string = appConfig.apiBaseUrl,
   defaultTimeoutMs: number = appConfig.apiTimeoutMs,
@@ -72,6 +85,8 @@ export function createApiClient(
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal,
         cache: "no-store",
+        // Send the httpOnly session cookie set by the backend (a different port/origin in development).
+        credentials: "include",
       });
     } catch (cause) {
       if (timedOut)
@@ -101,6 +116,9 @@ export function createApiClient(
       const parsedError = errorResponseSchema.safeParse(payload);
       if (parsedError.success) {
         const { code, message, request_id } = parsedError.data.error;
+        if (response.status === 401 && code === "not_authenticated") {
+          sessionEndedListeners.forEach((listener) => listener());
+        }
         throw new ApiError("http", message, {
           status: response.status,
           code,

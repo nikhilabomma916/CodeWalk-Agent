@@ -79,25 +79,58 @@ or why they did not), `analyzers[]` (name + version), `errors[]`, `analysis_dura
 Languages that have analyzers, with `available: false` and a `detail` when tooling is missing (for
 example, Node.js is not installed for the TypeScript worker).
 
-## Persistence (requires PostgreSQL)
+## Authentication
 
-Every endpoint below returns 503 `database_not_configured` when `CODEWALK_DATABASE_URL` is unset, and
-503 `database_unavailable` when the server cannot be reached. IDs are UUIDs. List endpoints accept
-`limit`/`offset` and return `{items, total, limit, offset}`.
+The API uses a server-side session. A successful `register` or `login` sets an `httpOnly`,
+`SameSite=Lax` cookie (`codewalk_session`, `Secure` in production) holding a random 256-bit token.
+Only its SHA-256 is stored. Browsers must send requests with credentials
+(`fetch(..., { credentials: "include" })`). The token never appears in a response body.
+
+| Method & path | Description |
+| --- | --- |
+| `POST /auth/register` | `{name, email, password}` → 201 user + cookie. 409 `email_taken`. 429 `too_many_attempts` |
+| `POST /auth/login` | `{email, password}` → 200 user + cookie. 401 `invalid_credentials`, 403 `account_disabled`, 429 `too_many_attempts` (with `Retry-After`) |
+| `POST /auth/logout` | ends the session and clears the cookie (204, also when not signed in) |
+| `GET /auth/me` | the signed-in user, or 401 `not_authenticated` |
+
+The user object is `{id, name, email, created_at, last_login_at}`. Password hashes are never returned.
+
+- **Email** is trimmed and lower-cased. **Passwords** are 8–128 characters, with at least one letter
+  and one digit or symbol. They may not be overly repetitive, and may not equal the email address.
+- An unknown email and a wrong password produce the same 401 and take the same time. A disabled account
+  is only reported after the correct password. Registration has to report a taken email; it is rate
+  limited instead.
+- **CSRF:** besides `SameSite=Lax`, state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) that
+  carry an `Origin` header must come from `CODEWALK_CORS_ORIGINS` (or the API's own origin).
+  Otherwise the response is 403 `origin_not_allowed`.
+
+## Persistence (requires PostgreSQL and a signed-in user)
+
+Every endpoint below requires a session (401 `not_authenticated` otherwise). It returns 503
+`database_not_configured` when `CODEWALK_DATABASE_URL` is unset, and 503 `database_unavailable` when
+the server cannot be reached. IDs are UUIDs. List endpoints accept `limit`/`offset` and return
+`{items, total, limit, offset}`.
+
+**Ownership:** every project belongs to the user who created it. A project, file, analysis, version,
+or history entry of another user is answered exactly like a missing one (404), so IDs reveal nothing.
+`POST /analysis/code` and the health/info endpoints stay public. Live analysis stores nothing.
 
 ### Projects
 
 | Method & path | Description |
 | --- | --- |
 | `GET /projects/workspace` | server folders under `CODEWALK_WORKSPACE_ROOT` that can be linked |
-| `POST /projects` | create `{name, description?, root_path?}`. Names are unique, case-insensitively (409 `project_exists`) |
-| `GET /projects` | list, most recently updated first |
+| `POST /projects` | create `{name, description?, root_path?}`. Names are unique per user, case-insensitively (409 `project_exists`), and may not contain slashes |
+| `GET /projects` | the caller's projects, most recently updated first |
 | `GET /projects/{id}` | get one |
 | `PATCH /projects/{id}` | rename / re-describe |
 | `DELETE /projects/{id}` | delete, with its files, analyses and diagnostics (cascade) |
 | `POST /projects/{id}/analyze` | run project intelligence; linked folders are rescanned and synced first |
 | `GET /projects/{id}/intelligence` | latest intelligence from stored files (404 `not_analyzed` before the first run) |
 | `GET /projects/{id}/analyses` | analysis history; filter with `analysis_type` and `file_id` |
+
+Project responses include `stats`: `{file_count, total_bytes, total_lines, languages: [{language,
+files}], last_analyzed_at}`. These are computed from the stored files and analyses.
 
 A project with `root_path` is linked to a folder inside `CODEWALK_WORKSPACE_ROOT`. It is read-only
 through the file API (409 `project_read_only`) and updated by rescanning. Paths that escape the workspace
@@ -124,6 +157,39 @@ failed to parse, which does not stop the analysis), `sync` (created/updated/dele
 Save responses are `{file, analysis}`. Only the newest `CODEWALK_ANALYSIS_HISTORY_PER_FILE` code
 analyses are kept per file.
 
+### File versions
+
+Every content change (create, save, restore, and folder rescans) is stored as a numbered version.
+Only the newest `CODEWALK_FILE_VERSION_HISTORY_LIMIT` versions are kept per file.
+
+| Method & path | Description |
+| --- | --- |
+| `GET /projects/{id}/files/{file_id}/versions` | newest first, without content: `{version, size, line_count, content_hash, source, author_id, created_at}` |
+| `GET /projects/{id}/files/{file_id}/versions/{n}` | one version with `content` (404 `version_not_found` once pruned) |
+| `POST /projects/{id}/files/{file_id}/versions/{n}/restore` | make version *n* current. Saved as a new version and analyzed like a save |
+
+`source` is `create`, `edit`, `restore`, or `scan`.
+
+### History
+
+Events are written in the same transaction as the action itself, so the history contains exactly
+what happened. Nothing is inferred afterwards.
+
+| Method & path | Description |
+| --- | --- |
+| `GET /history` | the caller's events. Filters: `project_id`, `event_type` (repeatable), `order=desc\|asc` (by time), `limit` ≤ 200, `offset` |
+| `GET /history/{event_id}` | one event plus context: `project_exists`, `current_project_name`, `current_file_path` (after renames), and `analysis` (`status`, `language`, `duration_ms`, `diagnostic_count`, `severity_counts`) if still kept |
+
+Event types: `project.created`, `project.updated`, `project.deleted`, `project.analyzed`,
+`file.created`, `file.updated`, `file.restored`, `file.deleted`, and `file.analyzed`. Each event stores
+`project_name` and `file_path` as they were at the time. `project_id`/`file_id`/`analysis_id` become
+`null` once the target is deleted (or the analysis is pruned). `details` holds a small summary, such as
+`version`, `diagnostic_count`, `analysis_status`, `renamed_from`, `restored_from`, `changed`, or
+`statistics`.
+
+Live editor analysis (`POST /analysis/code`) is not stored, so it does not appear in the history.
+Neither do local-folder or in-browser projects.
+
 ## Errors
 
 All errors share one shape:
@@ -142,8 +208,11 @@ All errors share one shape:
 | Status | `code` | When |
 | --- | --- | --- |
 | 400 | `bad_request` / `unsafe_path` | malformed request or rejected path |
-| 404 | `not_found`, `project_not_found`, `file_not_found`, `analysis_not_found`, `folder_not_found`, `not_analyzed` | unknown route or resource |
-| 409 | `project_exists`, `file_exists`, `project_read_only` | conflicting write |
+| 401 | `not_authenticated`, `invalid_credentials` | no or expired session; wrong email or password |
+| 403 | `account_disabled`, `origin_not_allowed` | disabled account; cross-site write |
+| 404 | `not_found`, `project_not_found`, `file_not_found`, `analysis_not_found`, `version_not_found`, `history_event_not_found`, `folder_not_found`, `not_analyzed` | unknown route or resource (or another user's) |
+| 409 | `email_taken`, `project_exists`, `file_exists`, `project_read_only` | conflicting write |
+| 429 | `too_many_attempts` | sign-in or registration rate limit (`Retry-After` header) |
 | 413 | `source_too_large`, `content_too_large` | source above `CODEWALK_MAX_SOURCE_BYTES` |
 | 422 | `file_not_analyzable` | stored file has no text content (binary or too large) |
 | 503 | `database_not_configured`, `database_unavailable` | persistence is off or unreachable (credentials are never returned) |

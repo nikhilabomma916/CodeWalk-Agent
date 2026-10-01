@@ -5,11 +5,13 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { ServerAvailability } from "./use-server-projects";
 
 const MAX_NAME_LENGTH = 100;
+const MAX_DESCRIPTION_LENGTH = 2000;
 
 export type ProjectStorage = "server" | "browser";
 
 export interface NewProjectRequest {
   name: string;
+  description?: string;
   storage: ProjectStorage;
   /** Server workspace folder to link (server storage only). */
   rootPath?: string;
@@ -23,6 +25,8 @@ interface NewProjectDialogProps {
   /** Resolves to an error message to show, or null on success. */
   onCreate(request: NewProjectRequest): Promise<string | null>;
   onClose(): void;
+  /** Offer "This browser tab" storage (Coding area); the Projects area manages server projects only. */
+  allowBrowserStorage?: boolean;
 }
 
 export function NewProjectDialog({
@@ -31,9 +35,11 @@ export function NewProjectDialog({
   workspaceFolders,
   onCreate,
   onClose,
+  allowBrowserStorage = true,
 }: NewProjectDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [storage, setStorage] = useState<ProjectStorage>("server");
   const [rootPath, setRootPath] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +55,7 @@ export function NewProjectDialog({
 
   const reset = () => {
     setName("");
+    setDescription("");
     setRootPath("");
     setError(null);
     setBusy(false);
@@ -66,9 +73,11 @@ export function NewProjectDialog({
     if (trimmed.length > MAX_NAME_LENGTH)
       return setError(`Use at most ${MAX_NAME_LENGTH} characters.`);
     if (/[\\/]/.test(trimmed)) return setError("Project names cannot contain slashes.");
+    if (!server.available && !allowBrowserStorage) return setError(server.reason);
     setBusy(true);
     const failure = await onCreate({
       name: trimmed,
+      description: effectiveStorage === "server" ? description.trim() || undefined : undefined,
       storage: effectiveStorage,
       rootPath: effectiveStorage === "server" && rootPath ? rootPath : undefined,
     });
@@ -118,45 +127,64 @@ export function NewProjectDialog({
             />
           </div>
 
-          <fieldset className="space-y-1.5">
-            <legend className="mb-1 text-xs text-fg-muted">Storage</legend>
-            <label className={`${radio} ${server.available ? "" : "opacity-50"}`}>
-              <input
-                type="radio"
-                name="storage"
-                value="server"
-                checked={effectiveStorage === "server"}
-                disabled={!server.available || busy}
-                onChange={() => setStorage("server")}
-                className="mt-0.5 accent-accent"
-              />
-              <span>
-                <span className="block text-fg">Server</span>
-                <span className="text-fg-muted">
-                  {server.available
-                    ? "Saved in the CodeWalk database; survives reloads and enables project analysis."
-                    : server.reason}
-                </span>
-              </span>
-            </label>
-            <label className={radio}>
-              <input
-                type="radio"
-                name="storage"
-                value="browser"
-                checked={effectiveStorage === "browser"}
+          {effectiveStorage === "server" && (
+            <div>
+              <label htmlFor="project-description" className="block text-xs text-fg-muted">
+                Description <span className="text-fg-subtle">(optional)</span>
+              </label>
+              <textarea
+                id="project-description"
+                value={description}
                 disabled={busy}
-                onChange={() => setStorage("browser")}
-                className="mt-0.5 accent-accent"
+                maxLength={MAX_DESCRIPTION_LENGTH}
+                rows={2}
+                onChange={(event) => setDescription(event.target.value)}
+                className="mt-1 w-full resize-y rounded border border-border bg-surface-sunken px-2 py-1.5 text-sm outline-none focus:border-accent"
               />
-              <span>
-                <span className="block text-fg">This browser tab</span>
-                <span className="text-fg-muted">
-                  Not persisted; files are lost when the tab closes.
+            </div>
+          )}
+
+          {allowBrowserStorage && (
+            <fieldset className="space-y-1.5">
+              <legend className="mb-1 text-xs text-fg-muted">Storage</legend>
+              <label className={`${radio} ${server.available ? "" : "opacity-50"}`}>
+                <input
+                  type="radio"
+                  name="storage"
+                  value="server"
+                  checked={effectiveStorage === "server"}
+                  disabled={!server.available || busy}
+                  onChange={() => setStorage("server")}
+                  className="mt-0.5 accent-accent"
+                />
+                <span>
+                  <span className="block text-fg">Server</span>
+                  <span className="text-fg-muted">
+                    {server.available
+                      ? "Saved in the CodeWalk database; survives reloads and enables project analysis."
+                      : server.reason}
+                  </span>
                 </span>
-              </span>
-            </label>
-          </fieldset>
+              </label>
+              <label className={radio}>
+                <input
+                  type="radio"
+                  name="storage"
+                  value="browser"
+                  checked={effectiveStorage === "browser"}
+                  disabled={busy}
+                  onChange={() => setStorage("browser")}
+                  className="mt-0.5 accent-accent"
+                />
+                <span>
+                  <span className="block text-fg">This browser tab</span>
+                  <span className="text-fg-muted">
+                    Not persisted; files are lost when the tab closes.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
+          )}
 
           {effectiveStorage === "server" && workspaceFolders !== null && (
             <div>

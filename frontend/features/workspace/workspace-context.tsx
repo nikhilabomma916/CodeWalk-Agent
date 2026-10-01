@@ -95,7 +95,8 @@ export interface WorkspaceActions {
   openDirectory(): Promise<void>;
   /** Opens a folder picked with <input webkitdirectory> (read-only copy). */
   openSnapshot(files: FileList): Promise<void>;
-  closeProject(): Promise<void>;
+  /** Closes the project, asking about unsaved changes. Resolves false if the user cancelled. */
+  closeProject(): Promise<boolean>;
   openFile(path: ProjectPath): Promise<void>;
   activateTab(path: ProjectPath): void;
   /** Closes a tab, asking what to do with unsaved changes. Resolves false if cancelled. */
@@ -108,8 +109,8 @@ export interface WorkspaceActions {
   replaceDiagnostics(source: string, path: ProjectPath, diagnostics: Diagnostic[]): void;
   setAnalysis(path: ProjectPath, analysis: FileAnalysis): void;
   revealPosition(path: ProjectPath, line: number, column: number): Promise<void>;
-  /** Opens a project stored by the backend. */
-  openServerProject(project: ServerProject): Promise<void>;
+  /** Opens a project stored by the backend. Resolves false if the user kept the current one. */
+  openServerProject(project: ServerProject): Promise<boolean>;
   /** Reopens the server project used last (after a page reload); false if none/unavailable. */
   restoreServerProject(): Promise<boolean>;
   /** Runs project intelligence (rescanning linked folders) and refreshes the file tree. */
@@ -313,15 +314,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       },
 
       async closeProject() {
-        if (!(await confirmDiscardAll())) return;
+        if (!(await confirmDiscardAll())) return false;
         sourceRef.current = null;
         rememberServerProject(null);
         dispatch({ type: "project/closed" });
+        return true;
       },
 
       async openServerProject(project) {
-        if (!(await confirmDiscardAll())) return;
+        if (!(await confirmDiscardAll())) return false;
         await loadSource(new ServerProjectSource(project));
+        return true;
       },
 
       async restoreServerProject() {

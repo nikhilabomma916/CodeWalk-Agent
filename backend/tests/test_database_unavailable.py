@@ -16,6 +16,11 @@ UNREACHABLE = "postgresql+psycopg://codewalk:s3cr3t-pw@127.0.0.1:9/codewalk"
 def test_unreachable_database_fails_safely(client_factory: Callable[[FastAPI], TestClient]) -> None:
     client = client_factory(build_app(database_url=UNREACHABLE, database_connect_timeout_seconds=1))
 
+    # Without a session the request is rejected before the database is used.
+    assert client.get("/api/v1/projects").status_code == 401
+
+    # A session cookie must be checked against the database, which is down.
+    client.cookies.set("codewalk_session", "a" * 43)
     response = client.get("/api/v1/projects")
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "database_unavailable"

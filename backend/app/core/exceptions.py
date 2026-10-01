@@ -32,6 +32,8 @@ class AppError(Exception):
 
     status_code: int = 400
     code: str = "bad_request"
+    # Extra response headers, e.g. Retry-After.
+    headers: dict[str, str] | None = None
 
     def __init__(self, message: str, *, code: str | None = None, status_code: int | None = None):
         super().__init__(message)
@@ -106,7 +108,7 @@ async def _app_error_handler(_: Request, exc: Exception) -> JSONResponse:
         raise exc
     log = logger.warning if exc.status_code >= 500 else logger.info
     log("Application error %s: %s", exc.code, exc.message)
-    return error_response(exc.status_code, exc.code, exc.message)
+    return error_response(exc.status_code, exc.code, exc.message, headers=exc.headers)
 
 
 async def _http_exception_handler(_: Request, exc: Exception) -> JSONResponse:

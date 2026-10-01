@@ -4,14 +4,33 @@ CodeWalk Agent is an AI-assisted coding environment: a browser-based IDE that he
 write, understand, debug, and improve code, and eventually understand whole projects through
 deterministic analysis, project intelligence, retrieval-augmented generation (RAG), and AI agents.
 
-> **Status:** Batches 1–2 of 6 are complete: foundation, editor, and API (Modules 1–3); code
-> analysis, project intelligence, and PostgreSQL persistence (Modules 4–6). Features listed under
+> **Status:** Batches 1–3 of 6 are complete: foundation, editor, and API (Modules 1–3); code
+> analysis, project intelligence, and PostgreSQL persistence (Modules 4–6); accounts, application
+> areas (Coding, Projects, History), and per-user project ownership (Batch 3). Features listed under
 > *Planned* are **not implemented yet**.
 
 ## Capabilities
 
 ### Implemented
 
+- **Accounts**: registration, sign-in, sign-out, and session handling. Passwords are hashed with
+  Argon2id, and the session is an opaque token in an `httpOnly`, `SameSite=Lax` cookie (only its
+  SHA-256 is stored). Failed sign-ins and registrations are rate limited.
+- **Application areas** (signed-in users only): **Coding** (`/app/coding`), **Projects**
+  (`/app/projects`, `/app/projects/[projectId]`), and **History** (`/app/history`), with a navigation
+  rail (a top bar on small screens) and an account menu. Open files and unsaved edits are kept while
+  moving between areas.
+- **Project ownership**: every project, file, analysis, version, and history entry belongs to one
+  user. The API checks ownership on every request, and another user's project is answered as
+  "not found".
+- **Projects area**: your projects with real statistics (files, lines, languages, last analysis),
+  create / edit / delete, a project page with an explorer (files and, after analysis, symbols) that
+  opens files in Coding, and project analysis.
+- **History**: activity recorded as it happens (projects created/renamed/deleted/analyzed, files
+  created/saved/restored/deleted/analyzed, with problem counts and file versions), grouped by day,
+  filterable by project and activity, with details that link back to the project and file.
+- **File versions**: each saved content change of a server file is kept as a numbered version (newest
+  50 per file by default) and can be viewed or restored through the API.
 - **Coding workspace** (Next.js + Monaco): project explorer, multi-file tabs, syntax highlighting for
   25+ languages, language auto-detection with manual override, find, format (where Monaco has a
   formatter), undo/redo, word wrap, minimap, folding, bracket matching, and resizable panels.
@@ -43,7 +62,8 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
 ### Planned (future batches)
 
 AI explanations and fixes with a diff/approval workflow (AI never silently overwrites code) →
-project search → RAG → multi-agent assistance → authentication → Docker deployment.
+project search → RAG → multi-agent assistance → Docker deployment. Account management (password
+change/reset, email verification, settings) is not implemented yet.
 
 ## Architecture
 
@@ -75,9 +95,9 @@ See [docs/architecture.md](docs/architecture.md) for the design and extension po
 ```
 .
 ├── frontend/                Next.js application
-│   ├── app/                 routes, root layout, global styles/theme
+│   ├── app/                 routes: / , (auth)/login|register, app/{coding,projects,history}
 │   ├── components/ui/       reusable UI primitives (dialogs, buttons, states)
-│   ├── features/            feature modules: workspace, explorer, editor, problems, status-bar, …
+│   ├── features/            feature modules: auth, shell, workspace, projects, history, editor, …
 │   ├── lib/                 framework-free helpers (config, languages, path utilities)
 │   ├── services/api/        typed HTTP client and endpoint wrappers
 │   ├── types/               shared domain types (diagnostics, project tree)
@@ -87,8 +107,8 @@ See [docs/architecture.md](docs/architecture.md) for the design and extension po
 │   │   ├── api/             router + routes + dependency providers
 │   │   ├── core/            config, logging, exceptions, middleware
 │   │   ├── schemas/         Pydantic request/response models
-│   │   ├── services/        business logic (health, analysis, project_intelligence, projects, files)
-│   │   ├── repositories/    data access (projects, files, analyses)
+│   │   ├── services/        business logic (auth, activity, analysis, project_intelligence, projects, files)
+│   │   ├── repositories/    data access (users, projects, files, versions, analyses, activity)
 │   │   ├── db/              SQLAlchemy models, engine/session
 │   │   ├── integrations/    resilient external HTTP client
 │   │   └── utils/           safe path handling
@@ -116,6 +136,14 @@ npm run db:up                        # PostgreSQL 17 in Docker (creates codewalk
 npm run db:migrate                   # alembic upgrade head
 ```
 
+Then open <http://localhost:3000> and create an account on the registration page. There are no
+built-in or seeded users. The tests create their own throw-away users.
+
+**Upgrading a database from Batch 2:** projects now need an owner. If the database contains
+projects created before accounts existed, `alembic upgrade head` stops and explains this. Run
+`uv --directory backend run alembic -x delete_unowned_projects=true upgrade head` to delete them
+(with their files and analyses) and continue.
+
 Without Docker, leave `CODEWALK_DATABASE_URL` empty. The editor and code analysis still work, and
 server projects report that persistence is unavailable. Use `127.0.0.1` rather than `localhost` in
 database URLs: on Windows, `localhost` tries IPv6 first and stalls against the container port.
@@ -139,10 +167,19 @@ The repository-level `.env` is read by both the backend and the frontend (`backe
 | `CODEWALK_TEST_DATABASE_URL` | dedicated `*_test` database for `backend/tests/db` (skipped when unset) |
 | `CODEWALK_WORKSPACE_ROOT` | server folder whose sub-folders can be linked as projects (disabled when unset) |
 | `CODEWALK_MAX_SOURCE_BYTES`, `CODEWALK_ANALYSIS_TIMEOUT_SECONDS`, `CODEWALK_NODE_BINARY` | analysis limits and tooling |
+| `CODEWALK_SESSION_TTL_HOURS` | sign-in lifetime (default 168 = 7 days) |
+| `CODEWALK_SESSION_COOKIE_NAME`, `CODEWALK_SESSION_COOKIE_SECURE` | session cookie name; `Secure` flag (defaults to on in production only) |
+| `CODEWALK_LOGIN_MAX_ATTEMPTS`, `CODEWALK_LOGIN_WINDOW_SECONDS` | failed sign-ins per address + email before HTTP 429 |
+| `CODEWALK_REGISTER_MAX_ATTEMPTS`, `CODEWALK_REGISTER_WINDOW_SECONDS` | registrations per address before HTTP 429 |
+| `CODEWALK_FILE_VERSION_HISTORY_LIMIT`, `CODEWALK_ANALYSIS_HISTORY_PER_FILE` | versions / analyses kept per file |
 | `CODEWALK_AI_*` | read by settings; reserved for the AI modules |
 | `NEXT_PUBLIC_API_BASE_URL` | backend API base URL used by the browser |
 
 Production startup fails fast on an insecure configuration (missing or weak secret key, wildcard CORS).
+In production, serve the frontend and API over HTTPS on the same site (for example `app.example.com`
+and `api.example.com`) so the `SameSite=Lax`, `Secure` session cookie is sent. In development they
+run on `localhost:3000` and `localhost:8000`, which count as the same site. Open the frontend at
+`localhost` (not `127.0.0.1`) to match `NEXT_PUBLIC_API_BASE_URL`.
 Interactive API docs are disabled in production unless `CODEWALK_DOCS_ENABLED=true`.
 
 ## Running
@@ -154,7 +191,7 @@ npm run dev:backend      # uv run python -m app   (auto-reload in development)
 npm run dev:frontend     # next dev
 ```
 
-- Frontend: <http://localhost:3000>
+- Frontend: <http://localhost:3000> (redirects to `/login`, or to `/app/projects` when signed in)
 - API: <http://localhost:8000/api/v1/health>
 - API docs (development): <http://localhost:8000/docs>
 

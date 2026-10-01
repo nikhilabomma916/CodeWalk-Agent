@@ -148,9 +148,9 @@ def test_analysis_history_and_diagnostics(api: TestClient) -> None:
 
 
 def test_history_is_capped_per_file(
-    database_url: str, workspace: Path, client_factory: Callable[[FastAPI], TestClient]
+    database_url: str, workspace: Path, signed_in: Callable[[FastAPI], TestClient]
 ) -> None:
-    api = client_factory(
+    api = signed_in(
         build_app(database_url=database_url, workspace_root=str(workspace), analysis_history_per_file=2)
     )
     project_id = create_project(api)["id"]
@@ -186,11 +186,9 @@ def test_file_conflicts_and_validation(api: TestClient) -> None:
 
 
 def test_oversized_file_content(
-    database_url: str, workspace: Path, client_factory: Callable[[FastAPI], TestClient]
+    database_url: str, workspace: Path, signed_in: Callable[[FastAPI], TestClient]
 ) -> None:
-    api = client_factory(
-        build_app(database_url=database_url, workspace_root=str(workspace), max_source_bytes=100)
-    )
+    api = signed_in(build_app(database_url=database_url, workspace_root=str(workspace), max_source_bytes=100))
     project_id = create_project(api)["id"]
     response = api.post(f"/api/v1/projects/{project_id}/files", json={"path": "big.py", "content": "x" * 101})
     assert response.status_code == 413

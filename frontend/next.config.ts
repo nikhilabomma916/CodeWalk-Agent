@@ -10,6 +10,9 @@ loadEnvConfig(path.resolve(__dirname, ".."));
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The full-screen layout has controls in every corner (the account menu sits where the dev
+  // indicator would). Compile and runtime errors are still shown in development.
+  devIndicators: false,
   async headers() {
     return [
       {

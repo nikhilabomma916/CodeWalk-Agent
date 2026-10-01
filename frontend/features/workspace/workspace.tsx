@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
@@ -21,19 +21,23 @@ import { useWorkspace, WorkspaceProvider } from "./workspace-context";
 
 const NARROW_SCREEN_QUERY = "(max-width: 767px)";
 
-export function Workspace() {
+/**
+ * The single workspace state (open project, buffers, diagnostics) for the whole
+ * signed-in app. Mounted by the /app layout so it survives navigation between
+ * Coding, Projects, and History.
+ */
+export function WorkspaceProviders({ children }: { children: ReactNode }) {
   return (
     <ConfirmProvider>
       <WorkspaceProvider>
-        <CursorProvider>
-          <WorkspaceLayout />
-        </CursorProvider>
+        <CursorProvider>{children}</CursorProvider>
       </WorkspaceProvider>
     </ConfirmProvider>
   );
 }
 
-function WorkspaceLayout() {
+/** The Coding area: explorer, tabs, Monaco, Problems/Project panel, status bar. */
+export function CodingWorkspace() {
   const { state, actions, canOpenDirectory } = useWorkspace();
   const { connection, recheck } = useBackendHealth();
   const sidebarRef = usePanelRef();
@@ -50,11 +54,13 @@ function WorkspaceLayout() {
       ? serverProjects.workspace.folders
       : null;
 
-  // After a page reload, reopen the server project that was open before.
+  // After a page reload, reopen the server project that was open before
+  // (unless the URL asks for a specific project; see useCodingDeepLink).
   const restoreAttempted = useRef(false);
   useEffect(() => {
     if (!availability.available || restoreAttempted.current) return;
     restoreAttempted.current = true;
+    if (new URLSearchParams(window.location.search).has("project")) return;
     void actions.restoreServerProject();
   }, [actions, availability.available]);
 
@@ -66,7 +72,11 @@ function WorkspaceLayout() {
         return null;
       }
       try {
-        const project = await createProject({ name: request.name, rootPath: request.rootPath });
+        const project = await createProject({
+          name: request.name,
+          description: request.description,
+          rootPath: request.rootPath,
+        });
         setNewProjectOpen(false);
         await actions.openServerProject(project);
         if (project.root_path) await actions.analyzeServerProject(); // import the linked folder
@@ -131,7 +141,7 @@ function WorkspaceLayout() {
   }, [actions, activePath, toggleProblems, toggleSidebar]);
 
   return (
-    <div className="flex h-dvh min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <AppHeader
         sidebarOpen={hasProject && sidebarOpen}
         onToggleSidebar={toggleSidebar}

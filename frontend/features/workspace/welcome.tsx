@@ -1,6 +1,7 @@
 "use client";
 
 import { Database, FolderOpen, FolderPlus, RefreshCw, Trash2 } from "lucide-react";
+import Link from "next/link";
 
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { IconButton } from "@/components/ui/icon-button";
@@ -69,7 +70,7 @@ function ServerProjectList({
   if (state.projects.length === 0) {
     return (
       <p className="text-xs text-fg-muted">
-        No server projects yet. Create one with “New project”.
+        You have no projects yet. Create one with “Create project”.
       </p>
     );
   }
@@ -86,7 +87,8 @@ function ServerProjectList({
             <span className="block truncate text-sm text-fg hover:underline">{project.name}</span>
             <span className="block truncate text-[11px] text-fg-muted">
               {project.root_path ? `Linked folder: ${project.root_path} · ` : ""}
-              Updated {new Date(project.updated_at).toLocaleString()}
+              {project.stats.file_count} file{project.stats.file_count === 1 ? "" : "s"} · Updated{" "}
+              {new Date(project.updated_at).toLocaleString()}
             </span>
           </button>
           <IconButton label={`Delete ${project.name}`} onClick={() => void remove(project)}>
@@ -114,8 +116,10 @@ export function Welcome({
   return (
     <div className="flex h-full justify-center overflow-auto bg-surface p-6">
       <div className="my-auto w-full max-w-lg">
-        <h1 className="text-lg font-semibold text-fg">CodeWalk Agent</h1>
-        <p className="mt-1 text-sm text-fg-muted">Open a project to start editing.</p>
+        <h2 className="text-lg font-semibold text-fg">Start coding</h2>
+        <p className="mt-1 text-sm text-fg-muted">
+          Open one of your projects below, create a new one, or work on a local folder.
+        </p>
 
         {state.projectStatus === "error" && (
           <p
@@ -129,7 +133,7 @@ export function Welcome({
         <div className="mt-5 flex flex-col gap-2 sm:flex-row">
           <button type="button" onClick={onNewProject} className={button}>
             <FolderPlus aria-hidden className="size-4 text-accent" />
-            New project
+            Create project
           </button>
           <button type="button" onClick={onOpenFolder} className={button}>
             <FolderOpen aria-hidden className="size-4 text-accent" />
@@ -137,12 +141,15 @@ export function Welcome({
           </button>
         </div>
 
-        <section aria-label="Server projects" className="mt-6">
+        <section aria-label="Your projects" className="mt-6">
           <div className="mb-2 flex items-center gap-2">
             <Database aria-hidden className="size-4 text-fg-muted" />
-            <h2 className="flex-1 text-xs font-semibold tracking-wider text-fg-muted uppercase">
-              Server projects
-            </h2>
+            <h3 className="flex-1 text-xs font-semibold tracking-wider text-fg-muted uppercase">
+              Open a project
+            </h3>
+            <Link href="/app/projects" className="text-[11px] text-accent hover:underline">
+              Manage projects
+            </Link>
             {serverProjects.status !== "unavailable" && (
               <IconButton label="Refresh server projects" onClick={onRefreshServerProjects}>
                 <RefreshCw aria-hidden className="size-3.5" />

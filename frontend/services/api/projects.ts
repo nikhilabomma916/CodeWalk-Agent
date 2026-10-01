@@ -2,6 +2,15 @@ import { z } from "zod";
 
 import { apiClient, type ApiClient } from "./client";
 
+/** Computed by the backend from stored files and analyses. */
+const projectStatsSchema = z.object({
+  file_count: z.number(),
+  total_bytes: z.number(),
+  total_lines: z.number(),
+  languages: z.array(z.object({ language: z.string(), files: z.number() })),
+  last_analyzed_at: z.string().nullable(),
+});
+
 const projectSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -10,6 +19,7 @@ const projectSchema = z.object({
   read_only: z.boolean(),
   created_at: z.string(),
   updated_at: z.string(),
+  stats: projectStatsSchema,
 });
 
 export type ServerProject = z.infer<typeof projectSchema>;
@@ -55,12 +65,29 @@ export async function getProject(
 }
 
 export async function createProject(
-  input: { name: string; rootPath?: string },
+  input: { name: string; description?: string; rootPath?: string },
   client: ApiClient = apiClient,
 ): Promise<ServerProject> {
   const { data } = await client.request("/projects", {
     method: "POST",
-    body: { name: input.name, root_path: input.rootPath },
+    body: {
+      name: input.name,
+      description: input.description || undefined,
+      root_path: input.rootPath,
+    },
+    schema: projectSchema,
+  });
+  return data;
+}
+
+export async function updateProject(
+  id: string,
+  changes: { name?: string; description?: string | null },
+  client: ApiClient = apiClient,
+): Promise<ServerProject> {
+  const { data } = await client.request(`/projects/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: changes,
     schema: projectSchema,
   });
   return data;
@@ -133,4 +160,30 @@ export async function updateFileContent(
     { method: "PATCH", body: { content }, schema: fileSaveSchema, timeoutMs: 30_000 },
   );
   return data.file;
+}
+
+const fileVersionSchema = z.object({
+  version: z.number(),
+  size: z.number(),
+  line_count: z.number(),
+  content_hash: z.string(),
+  source: z.string(),
+  author_id: z.string().nullable(),
+  created_at: z.string(),
+  content: z.string(),
+});
+
+export type FileVersion = z.infer<typeof fileVersionSchema>;
+
+export async function getFileVersion(
+  projectId: string,
+  fileId: string,
+  version: number,
+  client: ApiClient = apiClient,
+): Promise<FileVersion> {
+  const { data } = await client.request(
+    `/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/versions/${version}`,
+    { schema: fileVersionSchema },
+  );
+  return data;
 }

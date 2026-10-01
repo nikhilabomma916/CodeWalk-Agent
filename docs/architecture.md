@@ -1,7 +1,8 @@
 # Architecture
 
-This document describes the architecture of Batch 1 (Modules 1–3: foundation, editor, API) and Batch 2
-(Modules 4–6: code analysis, project intelligence, persistence), and where later modules plug in.
+This document describes the architecture of Batch 1 (Modules 1–3: foundation, editor, API), Batch 2
+(Modules 4–6: code analysis, project intelligence, persistence), and Batch 3 (authentication,
+application areas, project ownership, history), and where later modules plug in.
 
 ## Layers
 
@@ -23,6 +24,35 @@ Backend (FastAPI)
 
 ## Frontend
 
+### Routes and authentication
+
+| Route | Access | Content |
+| --- | --- | --- |
+| `/` | public | redirects to `/app/projects` or `/login` |
+| `/login`, `/register` | signed-out | forms; signed-in users are sent on to `?next=` (only `/app…` paths are accepted) |
+| `/app` | signed-in | redirects to `/app/projects` |
+| `/app/coding` | signed-in | the editor workspace. `?project=<id>&file=<path>&line=<n>` opens a server project/file |
+| `/app/projects` | signed-in | project list and creation |
+| `/app/projects/[projectId]` | signed-in | project details, explorer, analyze/edit/delete |
+| `/app/history` | signed-in | activity, filterable with `?project=<id>&type=<event_type>` |
+
+`features/auth/auth-context.tsx` (`AuthProvider` in the root layout) is the only place that knows
+about the session. It exposes `status` (`loading | authenticated | unauthenticated | error`), `user`,
+`login`, `register`, `logout`, and `refresh`. On load it asks `GET /auth/me`. The API client reports
+every 401 `not_authenticated` response (`onSessionEnded`), and the provider then signs the UI out,
+wherever the request came from.
+
+`RequireAuth` wraps `/app/*`. Signed-out users go to `/login?next=<current path>`, and a deliberate
+sign-out goes to plain `/login`. If the session cannot be checked (backend down), it shows the error
+and a retry instead of redirecting, so an outage never looks like a sign-out and cannot cause a
+redirect loop. `RedirectIfAuthenticated` wraps `/login` and `/register`. These guards are UX only:
+the backend authorizes every request itself.
+
+The `/app` layout mounts `WorkspaceProviders` (confirm dialog, workspace state, cursor) once, above
+`AppShell` (navigation rail + account menu). The open project, tabs, and unsaved buffers therefore
+survive navigation between Coding, Projects, and History. Monaco models are recreated from the buffers
+when the editor remounts. Signing out first closes the project, which asks about unsaved changes.
+
 ### State
 
 `features/workspace/state.ts` defines a single reducer that is the source of truth for the project,
@@ -43,7 +73,7 @@ The workspace talks only to the `ProjectSource` interface (`features/workspace/s
 | `MemoryProjectSource` | "New project" | browser memory (lost on reload) |
 | `LocalDirectorySource` | File System Access API (Chromium) | the real file on disk |
 | `LocalSnapshotSource` | `<input webkitdirectory>` fallback | browser memory (originals untouched) |
-| `ServerProjectSource` | Welcome → "Server projects", or New project → "Server" (PostgreSQL) | `PATCH /projects/{id}/files/{file}` |
+| `ServerProjectSource` | Coding → "Open a project", a Projects/History link, or New project → "Server" (PostgreSQL) | `PATCH /projects/{id}/files/{file}` |
 
 Server projects are listed with `use-server-projects.ts`. Folder-linked server projects are read-only in
 the editor. Every source applies the same ignore rules
@@ -157,6 +187,33 @@ PostgreSQL 17 via SQLAlchemy 2 (sync, psycopg 3) and Alembic. Request flow: rout
 - Migrations: `npm run db:migrate` (`alembic upgrade head`). The URL comes from
   `CODEWALK_DATABASE_URL`, never from `alembic.ini`. The PostgreSQL test suite (`backend/tests/db`)
   builds its schema with these same migrations, and checks that the models and migrations do not drift.
+
+### Authentication and ownership (Batch 3)
+
+| Table | Key columns | Notes |
+| --- | --- | --- |
+| `users` | `id`, `email` (unique, lower-case), `name`, `password_hash` (Argon2id), `is_active`, `last_login_at`, timestamps | |
+| `auth_sessions` | `id`, `user_id` (CASCADE), `token_hash` (unique SHA-256), `expires_at` | expired rows are removed at the user's next sign-in |
+| `projects.owner_id` | → users (CASCADE) | unique index `(owner_id, lower(name))` replaces the global name index |
+| `file_versions` | `file_id` (CASCADE), `version`, `content`, `content_hash`, `source`, `author_id` (SET NULL) | unique `(file_id, version)`; pruned per file |
+| `activity_events` | `user_id` (CASCADE), `event_type`, `project_id`/`file_id`/`analysis_id` (SET NULL), `project_name`, `file_path`, `details` JSONB, `created_at` | indexes `(user_id, created_at)`, `(project_id, created_at)` |
+
+Migration `4814067a0efe` adds these. Projects from before accounts cannot be given an owner
+automatically, so the upgrade refuses to run while such projects exist, unless
+`-x delete_unowned_projects=true` is passed. Downgrade restores the Batch 2 schema.
+
+- **Session:** `get_current_user` (in `api/deps.py`) reads the cookie, checks the token's shape, and
+  looks up an unexpired session of an active user. Every user-data service (`ProjectService`,
+  `FileService`, `AnalysisService`, `ProjectIntelligenceService`, `HistoryService`) is built with
+  that user. Repositories take the owner id in every project query, so a wrong id is simply
+  "not found". There is no code path that loads a project without its owner.
+- **History:** `services/activity.ActivityRecorder.record()` is called by the services before they
+  commit, so an event exists exactly when its action was persisted. Failed or no-op actions (a
+  conflict, an unchanged save) record nothing.
+- **Abuse limits:** `core/rate_limit.AttemptLimiter` counts failed sign-ins per client address and
+  email, and registrations per address. It is in-process, so each worker counts separately.
+- **CSRF:** `SameSite=Lax` cookie + `OriginCheckMiddleware` (state-changing requests with a foreign
+  `Origin` get 403) + CORS restricted to `CODEWALK_CORS_ORIGINS` with credentials.
 
 ### Security foundations
 

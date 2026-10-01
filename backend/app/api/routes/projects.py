@@ -5,19 +5,26 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, Response, status
 
-from app.api.deps import AnalysisServiceDep, IntelligenceServiceDep, ProjectServiceDep, SettingsDep
+from app.api.deps import (
+    AnalysisServiceDep,
+    CurrentUserDep,
+    IntelligenceServiceDep,
+    ProjectServiceDep,
+    SettingsDep,
+)
 from app.db.models import AnalysisType
 from app.schemas.analysis import AnalysisRecord
 from app.schemas.common import Page
 from app.schemas.errors import ErrorResponse
 from app.schemas.projects import ProjectCreate, ProjectResponse, ProjectUpdate, WorkspaceInfo
 from app.services.project_intelligence.models import ProjectAnalysisResult
-from app.services.projects import to_response, workspace_info
+from app.services.projects import workspace_info
 
 router = APIRouter(
     prefix="/projects",
     tags=["projects"],
     responses={
+        401: {"model": ErrorResponse, "description": "Not signed in."},
         404: {"model": ErrorResponse, "description": "Project not found."},
         503: {"model": ErrorResponse, "description": "Database not configured or unavailable."},
     },
@@ -30,7 +37,7 @@ Offset = Annotated[int, Query(ge=0)]
 @router.get(
     "/workspace", response_model=WorkspaceInfo, summary="Server workspace folders available for linking"
 )
-def get_workspace(settings: SettingsDep) -> WorkspaceInfo:
+def get_workspace(settings: SettingsDep, _: CurrentUserDep) -> WorkspaceInfo:
     return workspace_info(settings)
 
 
@@ -42,18 +49,18 @@ def get_workspace(settings: SettingsDep) -> WorkspaceInfo:
     responses={409: {"model": ErrorResponse, "description": "A project with this name exists."}},
 )
 def create_project(data: ProjectCreate, service: ProjectServiceDep) -> ProjectResponse:
-    return to_response(service.create(data))
+    return service.response(service.create(data))
 
 
 @router.get("", response_model=Page[ProjectResponse], summary="List projects (most recently updated first)")
 def list_projects(service: ProjectServiceDep, limit: Limit = 50, offset: Offset = 0) -> Page[ProjectResponse]:
     items, total = service.list(limit=limit, offset=offset)
-    return Page(items=[to_response(p) for p in items], total=total, limit=limit, offset=offset)
+    return Page(items=service.responses(items), total=total, limit=limit, offset=offset)
 
 
 @router.get("/{project_id}", response_model=ProjectResponse, summary="Get a project")
 def get_project(project_id: uuid.UUID, service: ProjectServiceDep) -> ProjectResponse:
-    return to_response(service.get(project_id))
+    return service.response(service.get(project_id))
 
 
 @router.patch(
@@ -63,7 +70,7 @@ def get_project(project_id: uuid.UUID, service: ProjectServiceDep) -> ProjectRes
     responses={409: {"model": ErrorResponse}},
 )
 def update_project(project_id: uuid.UUID, data: ProjectUpdate, service: ProjectServiceDep) -> ProjectResponse:
-    return to_response(service.update(project_id, data))
+    return service.response(service.update(project_id, data))
 
 
 @router.delete(

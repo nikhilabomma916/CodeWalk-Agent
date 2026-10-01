@@ -43,7 +43,15 @@ def _validate_file_path(value: str) -> str:
     return normalized
 
 
+def _validate_project_name(value: str) -> str:
+    value = _validate_name(value)
+    if "/" in value or "\\" in value:
+        raise ValueError("must not contain slashes")
+    return value
+
+
 DisplayName = Annotated[str, Field(min_length=1, max_length=100), AfterValidator(_validate_name)]
+ProjectName = Annotated[str, Field(min_length=1, max_length=100), AfterValidator(_validate_project_name)]
 RelativePath = Annotated[str, Field(min_length=1, max_length=1024), AfterValidator(_validate_relative_path)]
 ProjectFilePath = Annotated[str, Field(min_length=1, max_length=1024), AfterValidator(_validate_file_path)]
 

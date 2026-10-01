@@ -86,6 +86,21 @@ class Settings(BaseSettings):
     # Code analyses kept per file (older ones are pruned).
     analysis_history_per_file: int = Field(default=20, ge=1, le=1000)
 
+    # File versions kept per project file (older ones are pruned).
+    file_version_history_limit: int = Field(default=50, ge=1, le=1000)
+
+    # Login sessions: an opaque random token in an httpOnly cookie; only its hash is stored.
+    session_cookie_name: str = Field(default="codewalk_session", pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    session_ttl_hours: int = Field(default=168, ge=1, le=24 * 90)
+    # Send the cookie over HTTPS only. Defaults to on in production, off otherwise.
+    session_cookie_secure: bool | None = None
+    # Failed logins allowed per client address and email within the window (then HTTP 429).
+    login_max_attempts: int = Field(default=10, ge=1, le=1000)
+    login_window_seconds: int = Field(default=900, ge=1, le=86_400)
+    # Registrations allowed per client address within the window (then HTTP 429).
+    register_max_attempts: int = Field(default=20, ge=1, le=10_000)
+    register_window_seconds: int = Field(default=3600, ge=1, le=86_400)
+
     # Server directory whose sub-folders may be linked to projects and scanned.
     # Scanning is disabled when unset. Paths outside it are never read.
     workspace_root: Path | None = None
@@ -185,6 +200,12 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env is Environment.PRODUCTION
+
+    @property
+    def cookie_secure(self) -> bool:
+        if self.session_cookie_secure is not None:
+            return self.session_cookie_secure
+        return self.is_production
 
     @property
     def docs_are_enabled(self) -> bool:

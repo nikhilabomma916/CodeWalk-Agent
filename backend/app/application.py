@@ -16,7 +16,13 @@ from app.api.routes import meta
 from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
-from app.core.middleware import REQUEST_ID_HEADER, BodySizeLimitMiddleware, RequestContextMiddleware
+from app.core.middleware import (
+    REQUEST_ID_HEADER,
+    BodySizeLimitMiddleware,
+    OriginCheckMiddleware,
+    RequestContextMiddleware,
+)
+from app.core.rate_limit import AttemptLimiter
 from app.db.session import Database, DatabaseHealthCheck
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
@@ -91,10 +97,16 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         typescript_worker=typescript_worker,
     )
 
+    app.state.login_limiter = AttemptLimiter(settings.login_max_attempts, settings.login_window_seconds)
+    app.state.register_limiter = AttemptLimiter(
+        settings.register_max_attempts, settings.register_window_seconds
+    )
+
     register_exception_handlers(app)
 
-    # Middleware added last runs first: CORS -> request context -> body limit -> routes.
+    # Middleware added last runs first: CORS -> request context -> origin check -> body limit -> routes.
     app.add_middleware(BodySizeLimitMiddleware, max_body_bytes=settings.max_request_body_bytes)
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.cors_origins)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,

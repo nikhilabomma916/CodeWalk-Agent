@@ -1,4 +1,8 @@
-"""File business rules. File content is user data: stored and analyzed, never executed."""
+"""File business rules. File content is user data: stored and analyzed, never executed.
+
+Every content change (create, edit, restore) is recorded as a new file version;
+only the newest ``file_version_history_limit`` versions are kept per file.
+"""
 
 from __future__ import annotations
 
@@ -10,10 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import AppError, ConflictError, NotFoundError
-from app.db.models import Analysis, Project, ProjectFile
+from app.db.models import ActivityType, Analysis, FileVersion, FileVersionSource, Project, ProjectFile, User
+from app.repositories.file_versions import FileVersionRepository
 from app.repositories.files import FileRepository
 from app.repositories.projects import ProjectRepository
 from app.schemas.projects import FileCreate, FileUpdate
+from app.services.activity import ActivityRecorder
 from app.services.analysis.service import AnalysisService
 from app.services.file_content import file_values
 from app.services.projects import ProjectService
@@ -32,13 +38,16 @@ class ProjectReadOnlyError(ConflictError):
 
 
 class FileService:
-    def __init__(self, session: Session, settings: Settings, analysis: AnalysisService) -> None:
+    def __init__(self, session: Session, settings: Settings, analysis: AnalysisService, owner: User) -> None:
         self.session = session
         self.settings = settings
         self.analysis = analysis
-        self.projects = ProjectService(session, settings)
+        self.owner = owner
+        self.projects = ProjectService(session, settings, owner)
         self.project_repository = ProjectRepository(session)
         self.files = FileRepository(session)
+        self.versions = FileVersionRepository(session)
+        self.activity = ActivityRecorder(session, owner)
 
     def _writable_project(self, project_id: uuid.UUID) -> Project:
         project = self.projects.get(project_id)
@@ -52,6 +61,14 @@ class FileService:
             raise ContentTooLargeError(
                 f"File content is {size} bytes; the limit is {self.settings.max_source_bytes}."
             )
+
+    def _record_version(self, record: ProjectFile, source: FileVersionSource) -> int | None:
+        """Snapshot the content as a new version; returns its number (None without content)."""
+        version = self.versions.add(record, source=source, author_id=self.owner.id)
+        if version is None:
+            return None
+        self.versions.prune(record.id, keep=self.settings.file_version_history_limit)
+        return version.version
 
     def get(self, project_id: uuid.UUID, file_id: uuid.UUID) -> ProjectFile:
         self.projects.get(project_id)
@@ -71,7 +88,15 @@ class FileService:
             raise ConflictError(f"{data.path} already exists.", code="file_exists")
         try:
             record = self.files.create(project_id=project_id, **file_values(data.path, data.content))
+            version = self._record_version(record, FileVersionSource.CREATE)
             analysis = self.analysis.record_file_analysis(record)[0] if data.content else None
+            self.activity.record(
+                ActivityType.FILE_CREATED,
+                project,
+                file=record,
+                analysis=analysis,
+                details={"version": version},
+            )
             self.project_repository.touch(project)
             self.session.commit()
         except IntegrityError:
@@ -81,6 +106,17 @@ class FileService:
 
     def update(
         self, project_id: uuid.UUID, file_id: uuid.UUID, data: FileUpdate
+    ) -> tuple[ProjectFile, Analysis | None]:
+        return self._update(project_id, file_id, data, FileVersionSource.EDIT)
+
+    def _update(
+        self,
+        project_id: uuid.UUID,
+        file_id: uuid.UUID,
+        data: FileUpdate,
+        source: FileVersionSource,
+        *,
+        restored_from: int | None = None,
     ) -> tuple[ProjectFile, Analysis | None]:
         project = self._writable_project(project_id)
         record = self.get(project_id, file_id)
@@ -98,10 +134,24 @@ class FileService:
         if not content_changed:  # rename only: keep the cached structure
             values.pop("structure")
         analysis: Analysis | None = None
+        previous_path = record.path
+        details: dict[str, object] = {}
         try:
             self.files.update(record, **values)
             if content_changed:
+                details["version"] = self._record_version(record, source)
                 analysis = self.analysis.record_file_analysis(record)[0]
+            if new_path is not None:
+                details["renamed_from"] = previous_path
+            if restored_from is not None:
+                details["restored_from"] = restored_from
+            self.activity.record(
+                ActivityType.FILE_RESTORED if restored_from is not None else ActivityType.FILE_UPDATED,
+                project,
+                file=record,
+                analysis=analysis,
+                details=details,
+            )
             self.project_repository.touch(project)
             self.session.commit()
         except IntegrityError:
@@ -112,6 +162,30 @@ class FileService:
 
     def delete(self, project_id: uuid.UUID, file_id: uuid.UUID) -> None:
         project = self._writable_project(project_id)
-        self.files.delete(self.get(project_id, file_id))
+        record = self.get(project_id, file_id)
+        self.activity.record(ActivityType.FILE_DELETED, project, file_path=record.path)
+        self.files.delete(record)
         self.project_repository.touch(project)
         self.session.commit()
+
+    def list_versions(
+        self, project_id: uuid.UUID, file_id: uuid.UUID, *, limit: int, offset: int
+    ) -> tuple[Sequence[FileVersion], int]:
+        return self.versions.list(self.get(project_id, file_id).id, limit=limit, offset=offset)
+
+    def get_version(self, project_id: uuid.UUID, file_id: uuid.UUID, version: int) -> FileVersion:
+        record = self.versions.get(self.get(project_id, file_id).id, version)
+        if record is None:
+            raise NotFoundError(
+                "That version does not exist (it may have been pruned).", code="version_not_found"
+            )
+        return record
+
+    def restore_version(
+        self, project_id: uuid.UUID, file_id: uuid.UUID, version: int
+    ) -> tuple[ProjectFile, Analysis | None]:
+        """Make an earlier version the current content. Recorded as a new version, so it can be undone."""
+        content = self.get_version(project_id, file_id, version).content
+        return self._update(
+            project_id, file_id, FileUpdate(content=content), FileVersionSource.RESTORE, restored_from=version
+        )

@@ -9,8 +9,9 @@ the variable these tests are skipped, never faked.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
@@ -21,7 +22,11 @@ from sqlalchemy import create_engine, make_url, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.db.models import User
+from app.repositories.users import UserRepository
 from tests.conftest import build_app
+
+TEST_PASSWORD = "correct-horse-7"
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 # Fail fast instead of hanging when the server (or one resolved address) does not answer.
@@ -72,13 +77,32 @@ def _clean_tables(request: pytest.FixtureRequest) -> Iterator[None]:
     yield
     if engine is not None:
         with engine.begin() as connection:
-            connection.execute(text("TRUNCATE projects, files, analyses, diagnostics CASCADE"))
+            # users cascades to every owned table (sessions, projects, files, analyses, history).
+            connection.execute(text("TRUNCATE users CASCADE"))
 
 
 @pytest.fixture
 def session(engine: Engine) -> Iterator[Session]:
     with Session(engine, expire_on_commit=False) as session:
         yield session
+
+
+@pytest.fixture
+def owner(session: Session) -> User:
+    """A user row for repository-level tests (the hash is not a real password)."""
+    user = UserRepository(session).create(email="owner@example.com", name="Owner", password_hash="x")
+    session.commit()
+    return user
+
+
+def register(
+    client: TestClient, email: str = "alice@example.com", name: str = "Alice", password: str = TEST_PASSWORD
+) -> dict[str, Any]:
+    """Register (which also signs the client in through the session cookie)."""
+    response = client.post("/api/v1/auth/register", json={"email": email, "name": name, "password": password})
+    assert response.status_code == 201, response.text
+    body: dict[str, Any] = response.json()
+    return body
 
 
 @pytest.fixture
@@ -94,6 +118,35 @@ def db_app(database_url: str, workspace: Path, engine: Engine) -> FastAPI:
 
 
 @pytest.fixture
-def api(db_app: FastAPI) -> Iterator[TestClient]:
+def anonymous(db_app: FastAPI) -> Iterator[TestClient]:
+    """A client that is not signed in."""
     with TestClient(db_app) as client:
         yield client
+
+
+@pytest.fixture
+def api(db_app: FastAPI) -> Iterator[TestClient]:
+    """A client signed in as alice@example.com."""
+    with TestClient(db_app) as client:
+        register(client)
+        yield client
+
+
+@pytest.fixture
+def other_user(db_app: FastAPI) -> Iterator[TestClient]:
+    """A second signed-in user (mallory@example.com), sharing the same app and database."""
+    with TestClient(db_app) as client:
+        register(client, email="mallory@example.com", name="Mallory")
+        yield client
+
+
+@pytest.fixture
+def signed_in(client_factory: Callable[[FastAPI], TestClient]) -> Callable[[FastAPI], TestClient]:
+    """Builds a signed-in client for an app with custom settings."""
+
+    def factory(application: FastAPI) -> TestClient:
+        client = client_factory(application)
+        register(client)
+        return client
+
+    return factory

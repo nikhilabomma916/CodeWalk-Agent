@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderOpen, FolderPlus, PanelLeft, X } from "lucide-react";
+import { FolderOpen, FolderPlus, PanelLeft, ScanSearch, X } from "lucide-react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { EditorSettingsMenu } from "@/features/settings/editor-settings-menu";
@@ -56,25 +56,9 @@ export function AppHeader({
         <PanelLeft aria-hidden className="size-4" />
       </IconButton>
 
-      <div className="flex items-center gap-2 pr-2">
-        <svg
-          aria-hidden
-          viewBox="0 0 24 24"
-          className="size-5 text-accent"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        >
-          <path
-            d="M8 6 3 12l5 6M16 6l5 6-5 6M13.5 4l-3 16"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-        <span className="hidden text-sm font-semibold tracking-tight text-fg sm:inline">
-          CodeWalk Agent
-        </span>
-      </div>
+      <h1 className="pr-1 text-[11px] font-semibold tracking-wider text-fg-muted uppercase">
+        Coding
+      </h1>
 
       {project && (
         <nav
@@ -113,6 +97,15 @@ export function AppHeader({
           <span className="mr-2 hidden text-[11px] text-fg-muted lg:inline">
             {unsavedCount} unsaved file{unsavedCount === 1 ? "" : "s"}
           </span>
+        )}
+        {project?.serverProjectId && (
+          <IconButton
+            label="Analyze project"
+            onClick={() => void actions.analyzeServerProject()}
+            disabled={state.intelligence.status === "loading"}
+          >
+            <ScanSearch aria-hidden className="size-4" />
+          </IconButton>
         )}
         <IconButton label="New project" onClick={onNewProject}>
           <FolderPlus aria-hidden className="size-4" />

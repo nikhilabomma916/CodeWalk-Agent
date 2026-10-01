@@ -20,9 +20,19 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError
-from app.db.models import AnalysisStatus, AnalysisType, Project, ProjectFile
+from app.db.models import (
+    ActivityType,
+    AnalysisStatus,
+    AnalysisType,
+    FileVersionSource,
+    Project,
+    ProjectFile,
+    User,
+)
 from app.repositories.analyses import AnalysisRepository
+from app.repositories.file_versions import FileVersionRepository
 from app.repositories.files import FileRepository
+from app.services.activity import ActivityRecorder
 from app.services.file_content import file_values
 from app.services.languages import Language
 from app.services.project_intelligence.models import (
@@ -41,12 +51,14 @@ MAX_STORED_ERRORS = 200
 
 
 class ProjectIntelligenceService:
-    def __init__(self, session: Session, settings: Settings) -> None:
+    def __init__(self, session: Session, settings: Settings, owner: User) -> None:
         self.session = session
         self.settings = settings
-        self.projects = ProjectService(session, settings)
+        self.projects = ProjectService(session, settings, owner)
         self.files = FileRepository(session)
+        self.versions = FileVersionRepository(session)
         self.analyses = AnalysisRepository(session)
+        self.activity = ActivityRecorder(session, owner)
 
     def analyze(self, project_id: uuid.UUID) -> ProjectAnalysisResult:
         started = time.perf_counter()
@@ -78,6 +90,20 @@ class ProjectIntelligenceService:
             diagnostic_count=0,
             details=self._details(result, directories, skipped),
         )
+        statistics = result.statistics
+        event_details: dict[str, Any] = {
+            "statistics": {
+                "files": statistics.total_files,
+                "lines": statistics.total_lines,
+                "symbols": statistics.total_symbols,
+                "languages": len(statistics.languages),
+                "errors": statistics.analysis_errors,
+            },
+            "duration_ms": round(result.duration_ms),
+        }
+        if sync is not None:
+            event_details["sync"] = sync.model_dump()
+        self.activity.record(ActivityType.PROJECT_ANALYZED, project, analysis=analysis, details=event_details)
         self.projects.projects.touch(project)
         self.session.commit()
         result.analysis_id = str(analysis.id)
@@ -150,16 +176,23 @@ class ProjectIntelligenceService:
             values = file_values(file.path, file.content, file.size)
             record = existing.get(file.path)
             if record is None:
-                self.files.create(project_id=project.id, **values)
+                record = self.files.create(project_id=project.id, **values)
+                self._record_version(record)
                 created += 1
             elif record.content_hash != values["content_hash"] or record.size != values["size"]:
                 self.files.update(record, **values)
+                self._record_version(record)
                 updated += 1
             else:
                 unchanged += 1
         removed = [path for path in existing if path not in seen]
         self.files.delete_paths(project.id, removed)
         return SyncSummary(created=created, updated=updated, deleted=len(removed), unchanged=unchanged)
+
+    def _record_version(self, record: ProjectFile) -> None:
+        """Changes found by a rescan become versions too (no author: they come from disk)."""
+        if self.versions.add(record, source=FileVersionSource.SCAN, author_id=None) is not None:
+            self.versions.prune(record.id, keep=self.settings.file_version_history_limit)
 
     @staticmethod
     def _details(

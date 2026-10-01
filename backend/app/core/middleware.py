@@ -137,3 +137,38 @@ class BodySizeLimitMiddleware:
     async def _reject(self, scope: Scope, receive: Receive, send: Send) -> None:
         response = error_response(413, "payload_too_large", self._message())
         await response(scope, receive, send)
+
+
+class OriginCheckMiddleware:
+    """CSRF defence for cookie-authenticated requests.
+
+    Browsers send an ``Origin`` header with every cross-origin request and with
+    same-origin non-GET requests. State-changing requests (POST, PUT, PATCH,
+    DELETE) that carry an ``Origin`` must come from an allowed frontend origin or
+    from the API's own origin; anything else is rejected with 403 before it
+    reaches a route. Requests without ``Origin`` (curl, server-to-server) cannot
+    ride a victim's browser cookies and are let through. Together with the
+    ``SameSite=Lax`` session cookie this blocks cross-site form posts and fetches.
+    """
+
+    UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+    def __init__(self, app: ASGIApp, allowed_origins: list[str]) -> None:
+        self.app = app
+        self.allowed_origins = frozenset(allowed_origins)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope["method"] not in self.UNSAFE_METHODS:
+            await self.app(scope, receive, send)
+            return
+        headers = Headers(scope=scope)
+        origin = headers.get("origin")
+        if origin is not None and origin not in self.allowed_origins:
+            own_origin = f"{scope.get('scheme', 'http')}://{headers.get('host', '')}"
+            if origin != own_origin:
+                response = error_response(
+                    403, "origin_not_allowed", "Requests from this origin are not allowed."
+                )
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
