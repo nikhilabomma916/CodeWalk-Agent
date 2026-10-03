@@ -1,0 +1,14 @@
+{
+  "name": "codewalk-typescript-analyzer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Long-lived worker that runs the TypeScript compiler's diagnostics for the CodeWalk backend.",
+  "type": "module",
+  "main": "analyzer.mjs",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "typescript": "5.9.3"
+  }
+}
