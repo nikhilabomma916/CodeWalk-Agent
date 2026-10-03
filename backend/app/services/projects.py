@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.audit import audit
 from app.core.config import Settings
 from app.core.exceptions import AppError, ConflictError, NotFoundError
 from app.db.models import ActivityType, Project, User
@@ -100,6 +103,15 @@ class ProjectService:
     def get(self, project_id: uuid.UUID) -> Project:
         project = self.projects.get(self.owner.id, project_id)
         if project is None:
+            # Answered as "not found" either way; the audit log records whether the project exists
+            # and belongs to someone else (a cross-user access attempt).
+            foreign = self.session.scalar(select(Project.id).where(Project.id == project_id)) is not None
+            audit(
+                "project_access_denied" if foreign else "project_not_found",
+                level=logging.WARNING if foreign else logging.INFO,
+                user=self.owner.id,
+                project=project_id,
+            )
             raise NotFoundError("Project not found.", code="project_not_found")
         return project
 

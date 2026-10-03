@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
+import { AgentReview } from "@/features/agent/agent-review";
 import { FixReview } from "@/features/ai/fix-review";
 import { useLiveAnalysis } from "@/features/analysis/use-live-analysis";
 import { isDirty } from "@/features/workspace/state";
@@ -12,7 +13,7 @@ import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage } from "@/lib/languages";
 import type { Diagnostic } from "@/types/diagnostics";
 
-import { useSetCursor } from "./cursor-context";
+import { useSetCursor, type SelectionInfo } from "./cursor-context";
 import { EditorTabs } from "./editor-tabs";
 import { EditorToolbar } from "./editor-toolbar";
 import { useMonacoStatus } from "./use-monaco-status";
@@ -36,8 +37,8 @@ export function EditorArea() {
   );
 
   const handleCursor = useCallback(
-    (line: number, column: number, selectedChars: number) =>
-      setCursor({ line, column, selectedChars }),
+    (line: number, column: number, selectedChars: number, selection: SelectionInfo | null) =>
+      setCursor({ line, column, selectedChars, selection }),
     [setCursor],
   );
 
@@ -181,6 +182,7 @@ export function EditorArea() {
         {body}
         {overlay && <div className="absolute inset-0 z-10 bg-surface">{overlay}</div>}
         {ready && <FixReview path={activePath} />}
+        {ready && <AgentReview path={activePath} />}
       </div>
     </div>
   );

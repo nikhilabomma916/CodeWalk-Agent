@@ -114,6 +114,11 @@ export interface WorkspaceActions {
    * Used when the developer applies a reviewed AI fix.
    */
   replaceContent(path: ProjectPath, content: string): void;
+  /**
+   * The backend saved new content for a file (an approved agent change). An open buffer shows it as
+   * one undoable edit and is marked saved; files that are not open load it when opened.
+   */
+  syncSavedContent(path: ProjectPath, content: string): void;
   /** Opens a project stored by the backend. Resolves false if the user kept the current one. */
   openServerProject(project: ServerProject): Promise<boolean>;
   /** Reopens the server project used last (after a page reload); false if none/unavailable. */
@@ -441,6 +446,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
           type: "editor/reveal",
           request: { path, line, column, nonce: revealNonce.current },
         });
+      },
+
+      syncSavedContent(path, content) {
+        revealNonce.current += 1;
+        dispatch({ type: "editor/synced", request: { path, content, nonce: revealNonce.current } });
       },
 
       replaceContent(path, content) {

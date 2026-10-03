@@ -24,6 +24,8 @@ TABLES = {
     "diagnostics",
     "activity_events",
     "code_chunks",
+    "agent_runs",
+    "agent_actions",
 }
 
 

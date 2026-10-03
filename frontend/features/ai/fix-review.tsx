@@ -23,7 +23,7 @@ const DiffEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.Di
  * while the editor still holds them throws "TextModel got disposed before
  * DiffEditorWidget model got reset" when the review closes.
  */
-function ReviewDiff({
+export function ReviewDiff({
   path,
   original,
   modified,

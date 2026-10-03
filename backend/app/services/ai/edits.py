@@ -64,6 +64,11 @@ class _Lines:
         return self.starts[line - 1] + column - 1
 
 
+def line_table(text: str) -> _Lines:
+    """Line start offsets of ``text``; ``.offset(line, column)`` maps a 1-based position to an index."""
+    return _Lines.of(text)
+
+
 def line_edits_to_code_edits(file_path: str, code: str, edits: Sequence[ModelLineEdit]) -> list[CodeEdit]:
     """Turn whole-line replacements (as the model returns them) into exact ranges.
 

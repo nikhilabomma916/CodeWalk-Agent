@@ -1,5 +1,6 @@
 """Persistence model: users and login sessions, projects, files and their versions,
-analyses, diagnostics, the per-user activity history, and embedded code chunks."""
+analyses, diagnostics, the per-user activity history, embedded code chunks, and agent runs with
+their proposed changes."""
 
 from __future__ import annotations
 
@@ -80,6 +81,10 @@ class ActivityType(StrEnum):
     AI_ANALYZED = "ai.analyzed"
     AI_EXPLAINED = "ai.explained"
     AI_FIX_SUGGESTED = "ai.fix_suggested"
+    # Agent (Module 11): one run, and the developer's decision on a proposed change.
+    AGENT_RUN = "agent.run"
+    AGENT_ACTION_APPLIED = "agent.action_applied"
+    AGENT_ACTION_REJECTED = "agent.action_rejected"
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -289,4 +294,92 @@ class CodeChunk(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
             postgresql_using="hnsw",
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
+    )
+
+
+class AgentRunStatus(StrEnum):
+    COMPLETED = "completed"
+    LIMIT_REACHED = "limit_reached"  # stopped by a step, time, or context limit
+    FAILED = "failed"
+
+
+class AgentActionStatus(StrEnum):
+    PENDING = "pending"  # proposed; waiting for the developer
+    APPLIED = "applied"
+    REJECTED = "rejected"
+    STALE = "stale"  # the file changed after the proposal; never applied
+
+
+class AgentRun(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """One agent request and what happened: progress events, tool calls (metadata only), the answer.
+
+    No hidden reasoning is stored: events and tool records carry short, user-facing summaries.
+    """
+
+    __tablename__ = "agent_runs"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[AgentRunStatus] = mapped_column(_enum(AgentRunStatus, "agent_run_status"), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    file_path: Mapped[str | None] = mapped_column(String(MAX_PATH_LENGTH))
+    answer: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(String(50))
+    model: Mapped[str | None] = mapped_column(String(100))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    events: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    tool_calls: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    actions: Mapped[list[AgentAction]] = relationship(
+        back_populates="run",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="AgentAction.created_at",
+    )
+
+    __table_args__ = (
+        Index("ix_agent_runs_user_id_created_at", "user_id", "created_at"),
+        Index("ix_agent_runs_project_id_created_at", "project_id", "created_at"),
+    )
+
+
+class AgentAction(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """A change the agent proposed to one stored file. Applied only by an explicit developer approval,
+    and only while the file still has exactly the content the proposal was computed against."""
+
+    __tablename__ = "agent_actions"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    # Deleting the file deletes its pending proposals.
+    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(MAX_PATH_LENGTH), nullable=False)
+    status: Mapped[AgentActionStatus] = mapped_column(
+        _enum(AgentActionStatus, "agent_action_status"), nullable=False
+    )
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    explanation: Mapped[str] = mapped_column(Text, nullable=False)
+    # Exact ranges with the original and the replacement text (validated against base_content_hash).
+    changes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    diff: Mapped[str] = mapped_column(Text, nullable=False)
+    base_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # After a decision: new version, diagnostic count, or why it was stale.
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    run: Mapped[AgentRun] = relationship(back_populates="actions")
+
+    __table_args__ = (
+        Index("ix_agent_actions_run_id", "run_id"),
+        Index("ix_agent_actions_user_id_status", "user_id", "status"),
+        Index("ix_agent_actions_file_id", "file_id"),
     )

@@ -9,10 +9,19 @@ import {
   type SetStateAction,
 } from "react";
 
+export interface SelectionInfo {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
 export interface CursorInfo {
   line: number;
   column: number;
   selectedChars: number;
+  /** The primary selection, when it is not empty. */
+  selection?: SelectionInfo | null;
 }
 
 // Cursor updates are frequent, so they live in their own context: only the

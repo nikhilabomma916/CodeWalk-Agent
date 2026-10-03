@@ -68,7 +68,7 @@ def test_docs_enabled_outside_production(client: TestClient) -> None:
 
 
 def test_docs_disabled_in_production() -> None:
-    app = build_app(env="production", secret_key=STRONG_KEY)
+    app = build_app(env="production", secret_key=STRONG_KEY, cors_origins=["https://app.example.com"])
     with TestClient(app) as client:
         assert client.get("/docs").status_code == 404
         assert client.get("/api/v1/openapi.json").status_code == 404
@@ -110,3 +110,37 @@ def test_cors_rejects_unknown_origin(client: TestClient) -> None:
 def test_root_points_to_api(client: TestClient) -> None:
     body = client.get("/").json()
     assert body["api"] == "/api/v1"
+
+
+def test_production_requires_https_origins_and_secure_cookies() -> None:
+    """Development defaults must not silently become production settings."""
+    with pytest.raises(ValidationError, match="https://"):
+        make_settings(env="production", secret_key=STRONG_KEY, cors_origins=["http://localhost:3000"])
+    with pytest.raises(ValidationError, match="SESSION_COOKIE_SECURE"):
+        make_settings(
+            env="production",
+            secret_key=STRONG_KEY,
+            cors_origins=["https://app.example.com"],
+            session_cookie_secure=False,
+        )
+    production = make_settings(
+        env="production", secret_key=STRONG_KEY, cors_origins=["https://app.example.com"]
+    )
+    assert production.cookie_secure is True
+    assert production.docs_are_enabled is False
+
+
+def test_security_headers_on_api_and_docs() -> None:
+    with TestClient(build_app()) as client:
+        api = client.get("/api/v1/health")
+        assert api.headers["X-Content-Type-Options"] == "nosniff"
+        assert api.headers["X-Frame-Options"] == "DENY"
+        assert api.headers["Content-Security-Policy"].startswith("default-src 'none'")
+        assert api.headers["Cache-Control"] == "no-store"
+        assert "Strict-Transport-Security" not in api.headers  # never over plain HTTP in development
+        docs = client.get("/docs")
+        assert docs.status_code == 200
+        assert "Content-Security-Policy" not in docs.headers  # Swagger UI loads its own scripts
+    production = build_app(env="production", secret_key=STRONG_KEY, cors_origins=["https://app.example.com"])
+    with TestClient(production) as client:
+        assert client.get("/api/v1/health").headers["Strict-Transport-Security"].startswith("max-age=")

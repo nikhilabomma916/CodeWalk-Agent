@@ -101,6 +101,15 @@ class Settings(BaseSettings):
     # Chunks embedded by one indexing run; a larger project is indexed over several runs.
     rag_max_chunks_per_run: int = Field(default=2000, ge=1, le=50_000)
 
+    # Project-aware agent (Module 11): bounded tool loop over the AI provider. Needs AI assistance.
+    agent_max_steps: int = Field(default=8, ge=2, le=20)  # model turns per run (each: one tool or answer)
+    agent_timeout_seconds: float = Field(default=240.0, gt=0, le=1800)  # whole run, all steps
+    agent_max_context_chars: int = Field(default=60_000, ge=10_000, le=400_000)  # tool results kept
+    agent_max_actions: int = Field(default=3, ge=1, le=10)  # proposed changes per run
+    # Agent runs allowed per user within the window (then HTTP 429).
+    agent_max_runs: int = Field(default=20, ge=1, le=10_000)
+    agent_window_seconds: int = Field(default=600, ge=1, le=86_400)
+
     secret_key: SecretStr = SecretStr("")
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -230,6 +239,15 @@ class Settings(BaseSettings):
                 )
             if not self.cors_origins:
                 raise ValueError("CODEWALK_CORS_ORIGINS must list the frontend origin(s)")
+            # Development defaults must not carry over: production origins are explicit HTTPS origins,
+            # and the session cookie is never sent over plain HTTP.
+            insecure = [origin for origin in self.cors_origins if not origin.startswith("https://")]
+            if insecure:
+                raise ValueError(
+                    "CODEWALK_CORS_ORIGINS must use https:// in production (got " + ", ".join(insecure) + ")"
+                )
+            if self.session_cookie_secure is False:
+                raise ValueError("CODEWALK_SESSION_COOKIE_SECURE cannot be false in production")
         return self
 
     @property

@@ -3,8 +3,9 @@
 This document describes the architecture of Batch 1 (Modules 1–3: foundation, editor, API), Batch 2
 (Modules 4–6: code analysis, project intelligence, persistence), Batch 3 (authentication,
 application areas, project ownership, history), Batch 4 (Modules 7–9: AI analysis, AI
-explanations and fix suggestions, project-aware search), and Module 10 (semantic retrieval), and where
-later modules plug in.
+explanations and fix suggestions, project-aware search), Module 10 (semantic retrieval), and Modules
+11–13 (agent orchestration, workspace integration, security hardening), and where later modules plug
+in.
 
 > **Design history.** The original planning documents ([PRD](PRD.md),
 > [system architecture](system-architecture.md), [workflows](workflows.md),
@@ -324,6 +325,77 @@ ProjectSearchService (mode semantic | hybrid → RRF)    ProjectContextBuilder s
   used and why not. `AIAssistant` passes the per-request retriever through, so the AI endpoints get
   semantic context with no prompt or endpoint changes.
 
+### Agent orchestration (Module 11)
+
+`services/agent/` turns the existing AI provider and services into a bounded, project-aware agent.
+It adds no new search, retrieval, or analysis code: every tool wraps an existing service.
+
+```
+POST /agent/run ──▶ AgentService.run
+                     │ provider available? (AI settings) · agent rate limit · project ownership
+                     │ (ProjectSearchService.project_index) · request validation
+                     ▼
+         ┌──── step loop (≤ max_steps, ≤ timeout, ≤ context budget) ─────────────────────┐
+         │ prompts.user_prompt: <developer_request> + <editor> + <project_data> results   │
+         │ AIService.run(ModelAgentStep) ──▶ {status_message, call_tool | answer}          │
+         │ ToolPolicy: known tool? permission (read_only / proposed_change; never write)?  │
+         │             proposal budget? repeated call?                                     │
+         │ tool args validated (extra="forbid") · paths validated + in the project index   │
+         │ ToolSpec.run(ToolContext) ──▶ typed output, truncated, fed back as data        │
+         └──────────────────────────────────────────────────────────────────────────────────┘
+                     ▼
+        agent_runs (status, answer, events, tool-call metadata) · agent_actions (pending)
+        activity: agent.run
+POST /agent/actions/{id}/approve ──▶ AgentActionService: ownership · pending · file exists, same path ·
+        content hash = base hash · every original text in place · bounded ──▶ FileService.update
+        (version + analysis + history) ──▶ agent.action_applied · diagnostics returned
+```
+
+- **Tools** (`tools.py`): `get_diagnostics`, `analyze_code` (AnalysisEngine), `search_project`
+  and `semantic_search_project` (ProjectSearchService, deterministic / hybrid), `get_project_context`
+  (ProjectContextBuilder, which adds Module 10 semantic matches), `get_file_content` and
+  `get_symbol` (the Module 9 index), `explain_error` (evidence for one diagnostic), and
+  `propose_fix` (Module 8 edit validation, stored as an `AgentAction`). Each has a stable name, input
+  and output models, a permission, and a per-call output budget. The open file uses the editor's
+  buffer from the request; every other file comes from the stored project.
+- **Policy** (`policy.py`): the only place that decides whether a call runs. WRITE is never callable
+  by the model; there is no write tool at all.
+- **Prompts** (`prompts.py`): the system prompt is a fixed policy plus the tool catalog and is never
+  built from request or project content. Project content is escaped inside `<project_data>`.
+- **State**: `agent_runs` and `agent_actions` (migration `7b3e1c9d4f62`), both owned through
+  `users`/`projects` with cascading deletes; `activity_events` gains `agent.run`,
+  `agent.action_applied`, `agent.action_rejected`. Events and tool records hold user-facing summaries
+  and bounded arguments only.
+- **Transport**: synchronous. Events are produced in order by `emit` inside the loop, which is where
+  a streaming transport would attach.
+
+### Workspace integration (Module 12)
+
+- `services/api/agent.ts` extends the central API client (cookies, timeouts, cancellation, error
+  normalization) with status, run, run lookup, and approve/reject, plus `applyProposedChanges`,
+  which recomputes a proposal against the saved file and refuses if any original text moved.
+- `features/agent/agent-context.tsx` holds the agent state for the workspace: one request at a time,
+  cancellable, stale responses ignored, cleared when the project changes. It sends the project id,
+  the open file's buffer, its diagnostics, and the selection, never the whole project.
+- `features/agent/agent-panel.tsx` is the *Agent* tab of the bottom panel (request form, context
+  toggles, activity, answer, proposals); `agent-review.tsx` shows a proposal as a diff over the
+  editor, reusing the Module 8 diff component.
+- After Apply, `syncSavedContent` puts the server's saved content into the editor as one undoable edit
+  and marks it saved; live analysis then refreshes the Problems panel. Apply is disabled while the
+  file has unsaved edits. The editor reports the primary selection through `CursorProvider`.
+
+### Security hardening (Module 13)
+
+- `core/audit.py`: `security.<event>` lines on the `app.security` logger, with sanitized, bounded
+  values (no secrets, emails reduced to a short hash). Hooked into sign-in and registration,
+  `OriginCheckMiddleware`, `ProjectService.get` (cross-user access), agent tool denials, and
+  agent action decisions.
+- `RequestContextMiddleware`: adds `Permissions-Policy`, `Cross-Origin-Opener-Policy`, a
+  `default-src 'none'` CSP (except the docs pages), `Cache-Control: no-store` on API responses, and
+  HSTS in production. The frontend sends matching headers from `next.config.ts`.
+- `Settings`: production rejects `http://` CORS origins and `CODEWALK_SESSION_COOKIE_SECURE=false`,
+  in addition to the earlier secret-key and wildcard checks.
+
 ### Security foundations
 
 - Typed settings validation: wildcard CORS is rejected, and production requires a strong secret key.
@@ -345,7 +417,16 @@ ProjectSearchService (mode semantic | hybrid → RRF)    ProjectContextBuilder s
   server-side `SecretStr`; `/rag/status` never calls the provider or returns the key. Indexing sends
   source code to the embedding provider and only runs when a user asks for it.
 
-### Known limitations (Batch 4 and Module 10)
+### Known limitations (Batch 4 and Modules 10–13)
+
+- The agent is synchronous (no streaming): the UI shows elapsed time while it runs. Cancelling stops
+  waiting in the browser; the server finishes the run (bounded by its time limit).
+- Tools run in-process and are bounded by their own limits and the run deadline; a single slow tool
+  call cannot be pre-empted.
+- Proposals change one saved file each and need files under 100,000 characters.
+- Rate limits are per process; use a shared store or a proxy limit for several instances.
+- The frontend has no Content-Security-Policy yet: Next.js inline scripts need nonces and Monaco
+  needs worker sources, which belong to the deployment configuration (Module 14).
 
 - Only the Anthropic provider is implemented. AI quality depends on the model, and answers are
   advisory.
