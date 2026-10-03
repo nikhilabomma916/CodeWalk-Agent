@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.schemas.common import ProjectFilePath, ProjectName, RelativePath
+
+
+class ProjectCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: ProjectName
+    description: str | None = Field(default=None, max_length=2000)
+    root_path: RelativePath | None = Field(
+        default=None,
+        description=(
+            "Folder relative to the server's CODEWALK_WORKSPACE_ROOT to link. Linked projects are "
+            "populated by scanning and are read-only through the file API."
+        ),
+    )
+
+
+class ProjectUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: ProjectName | None = None
+    description: str | None = Field(default=None, max_length=2000)
+
+
+class LanguageCount(BaseModel):
+    language: str
+    files: int
+
+
+class ProjectStats(BaseModel):
+    """Computed from the stored files and analyses (no analysis is run to produce it)."""
+
+    file_count: int
+    total_bytes: int
+    total_lines: int
+    languages: list[LanguageCount] = Field(description="Files per language, most common first.")
+    last_analyzed_at: datetime | None = Field(description="When project intelligence last ran.")
+
+
+class ProjectResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    description: str | None
+    root_path: str | None
+    read_only: bool = Field(description="True for folder-linked projects (files come from scanning).")
+    created_at: datetime
+    updated_at: datetime
+    stats: ProjectStats
+
+
+class FileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: ProjectFilePath
+    content: str = ""
+
+
+class FileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: ProjectFilePath | None = Field(default=None, description="New path (rename/move).")
+    content: str | None = None
+
+
+class FileMetadata(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    path: str
+    name: str
+    language: str
+    size: int
+    line_count: int
+    content_hash: str | None
+    has_content: bool = Field(description="False for binary or oversized files, whose content is not stored.")
+    created_at: datetime
+    updated_at: datetime
+
+
+class FileDetail(FileMetadata):
+    content: str | None
+
+
+class FileVersionSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    version: int = Field(description="1 for the first saved content, increasing by one per change.")
+    size: int
+    line_count: int
+    content_hash: str
+    source: str = Field(description="create | edit | restore | scan (folder rescan)")
+    author_id: uuid.UUID | None
+    created_at: datetime
+
+
+class FileVersionDetail(FileVersionSummary):
+    content: str
+
+
+class WorkspaceInfo(BaseModel):
+    enabled: bool = Field(description="Whether folder-linked projects can be created on this server.")
+    folders: list[str] = Field(description="Top-level folders under the workspace root that can be linked.")

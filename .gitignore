@@ -1,3 +1,60 @@
+# ---- Secrets / environment -------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- Node / Next.js ---------------------------------------------------------
+node_modules/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.vercel/
+# Monaco assets copied from node_modules at dev/build time
+frontend/public/monaco/
+
+# ---- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# ---- Build output / coverage ------------------------------------------------
+dist/
+build/
+coverage/
+
+# ---- Logs / temp ------------------------------------------------------------
+logs/
+*.log
+tmp/
+*.tmp
+
+# ---- IDE / OS ---------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# From develop: the standard GitHub Python .gitignore template (kept verbatim).
+# Some entries overlap with the sections above; duplicates are harmless.
+# =============================================================================
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -216,3 +273,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---- Overrides for this repository -------------------------------------------
+# The Python template ignores lib/ (virtualenv folders); frontend/lib/ is application
+# source code and must stay tracked.
+!frontend/lib/
