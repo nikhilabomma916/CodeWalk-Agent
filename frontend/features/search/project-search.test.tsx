@@ -398,3 +398,52 @@ describe("ProjectSearch semantic retrieval", () => {
     expect(screen.queryByText(/hybrid ranking/)).not.toBeInTheDocument();
   });
 });
+
+describe("ProjectSearch request races", () => {
+  it("shows the newest query's results even when an older request answers last", async () => {
+    const base = fakeBackend(projectRoutes);
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith("/search")) return base(input, init);
+      const body = JSON.parse(String(init?.body));
+      const slow = body.query === "authenticate";
+      // Like a real fetch: an aborted request rejects instead of resolving.
+      return new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            resolve(
+              json({
+                query: body.query,
+                terms: [body.query],
+                results: slow ? [] : [RESULT],
+                total: slow ? 0 : 1,
+                truncated: false,
+                indexed_files: 1,
+                ranking: "",
+              }),
+            ),
+          slow ? 600 : 10,
+        );
+        init?.signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          reject(new DOMException("Aborted", "AbortError"));
+        });
+      });
+    }) as unknown as typeof fetch;
+    vi.stubGlobal("fetch", fetchImpl);
+    render(
+      <WorkspaceProviders>
+        <ServerProject>
+          <ProjectSearch focusSignal={0} />
+        </ServerProject>
+      </WorkspaceProviders>,
+    );
+    const box = await screen.findByRole("searchbox", { name: "Search project" });
+    await userEvent.type(box, "authenticate");
+    await new Promise((resolve) => setTimeout(resolve, 350)); // the slow request is now in flight
+    await userEvent.type(box, "_user");
+    expect(await screen.findByText("1 result in 1 file")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(screen.getByText("1 result in 1 file")).toBeInTheDocument();
+    expect(screen.queryByText("No matches.")).not.toBeInTheDocument();
+  });
+});

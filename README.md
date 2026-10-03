@@ -282,7 +282,7 @@ See [docs/architecture.md](docs/architecture.md) for the design and extension po
 
 ```bash
 npm run setup                        # npm install (frontend + TypeScript analyzer worker), uv sync (backend)
-cp .env.example .env                 # includes working local database URLs
+cp .env.example .env                 # then set POSTGRES_PASSWORD (random) and use it in both database URLs
 npm run db:up                        # PostgreSQL 17 + pgvector in Docker (creates codewalk + codewalk_test)
 npm run db:migrate                   # alembic upgrade head
 ```
@@ -389,6 +389,29 @@ npm run check            # lint + format check + typecheck + tests
 Per service: `cd backend && uv run pytest | ruff check app tests | mypy`, and
 `cd frontend && npm run test | lint | typecheck | build`.
 
+**Full regression (Module 14).** One command runs every gate and exits non-zero if any step fails.
+It needs `POSTGRES_PASSWORD` in `.env` (or the environment); the password is passed to commands
+only through environment variables and is redacted from all output.
+
+```bash
+npm run test:all            # runner self-test, backend (uv) + migrations, frontend lint/format/types/tests/build
+npm run test:all:docker     # same, backend steps in a Linux container on the compose network
+.\scripts\test-all.ps1      # Windows PowerShell wrapper for the same runner (accepts the same flags)
+node scripts/test-all.mjs --backend-docker --skip-build --log test-all.log   # flags: --skip-backend --skip-frontend --skip-build --log <file>
+npm run test:runner         # the runner's own tests: failures fail, quoting intact, secrets redacted
+npm run test:security       # auth, ownership, paths, secret files, agent tools, prompt injection, concurrency
+npm run test:integration    # live stack (requires `npm run dev`); 12 tests incl. cross-user isolation
+npm run test:perf -- --api http://127.0.0.1:8000/api/v1                # performance, live HTTP (Part A)
+npm run test:perf -- --api http://127.0.0.1:8000/api/v1 --in-process   # + Part B (needs CODEWALK_TEST_DATABASE_URL)
+```
+
+Migrations: `uv --directory backend run alembic upgrade head` and `alembic check` (both run inside
+`test:all`); `tests/db/test_production_validation.py` upgrades a populated pre-RAG database.
+Browser end-to-end checks are manual (see `docs/testing/module-14-test-matrix.md`, rows B-01 to
+B-08). Results and reports: `docs/testing/`. CI (`.github/workflows/ci.yml`) runs the backend and
+frontend gates on every push and pull request; live-provider tests run only on manual dispatch with
+repository secrets.
+
 **AI tests** never call a paid provider by default. The provider is tested through the real SDK
 with a mock HTTP transport, and the AI endpoints use a test-only stub provider (`tests/ai_stub.py`)
 to check CodeWalk's own logic. `tests/test_live_ai_provider.py` sends one real request only when a
@@ -414,7 +437,7 @@ the database name must end in `_test`:
 
 ```bash
 npm run db:up
-CODEWALK_TEST_DATABASE_URL=postgresql+psycopg://codewalk:codewalk_dev_password@127.0.0.1:5432/codewalk_test \
+CODEWALK_TEST_DATABASE_URL=postgresql+psycopg://codewalk:<password>@127.0.0.1:5432/codewalk_test \
   uv --directory backend run pytest tests/db
 ```
 

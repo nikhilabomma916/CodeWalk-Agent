@@ -380,6 +380,28 @@ describe("Agent panel", () => {
         }),
       /stopped at a limit/,
     ],
+    [
+      "backend unreachable",
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+      /backend is not reachable/,
+    ],
+    [
+      "malformed response",
+      () => json({ unexpected: "shape" }),
+      /did not match the expected format/,
+    ],
+    [
+      "server error without details",
+      () => new Response("<html>Traceback (most recent call last): ...</html>", { status: 500 }),
+      /not valid JSON|HTTP 500/,
+    ],
+    [
+      "session expired",
+      () => apiError(401, "not_authenticated", "Sign in to continue."),
+      /Sign in to continue/,
+    ],
   ])("shows %s states", async (_name, respond, text) => {
     renderAgent([
       ["GET", /^\/agent\/status$/, () => STATUS(true)],
@@ -387,6 +409,8 @@ describe("Agent panel", () => {
     ]);
     await ask("Why?");
     expect(await screen.findByRole("alert")).toHaveTextContent(text);
+    expect(screen.queryByText(/Traceback/)).not.toBeInTheDocument(); // never a raw stack trace
+    expect(screen.getByRole("button", { name: "Ask agent" })).toBeEnabled(); // never stuck loading
   });
 
   it("can cancel a running request", async () => {
@@ -410,5 +434,36 @@ describe("Agent panel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Cancelled/);
     expect(screen.getByRole("button", { name: "Ask agent" })).toBeEnabled();
+  });
+});
+
+describe("Agent request races", () => {
+  it("never lets an older, slower run overwrite a newer one", async () => {
+    const routes = fakeBackend([
+      ...projectRoutes,
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+    ]);
+    let calls = 0;
+    // Run 1 answers late and ignores cancellation (as a slow server would); run 2 answers at once.
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith("/agent/run")) return routes(input, init);
+      calls += 1;
+      const answer =
+        calls === 1 ? "OLD ANSWER from the first run" : "NEW ANSWER from the second run";
+      const delay = calls === 1 ? 300 : 10;
+      return new Promise<Response>((resolve) =>
+        setTimeout(() => resolve(json({ ...RUN, answer, actions: [] })), delay),
+      );
+    }) as unknown as typeof fetch;
+    renderAgent([], fetchImpl);
+    await ask("First question");
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    const box = screen.getByLabelText("Ask about your project");
+    await userEvent.clear(box);
+    await ask("Second question");
+    expect(await screen.findByText("NEW ANSWER from the second run")).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 400)); // run 1 resolves now
+    expect(screen.queryByText("OLD ANSWER from the first run")).not.toBeInTheDocument();
+    expect(screen.getByText("NEW ANSWER from the second run")).toBeInTheDocument();
   });
 });

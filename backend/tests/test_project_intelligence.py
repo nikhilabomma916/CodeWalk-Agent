@@ -348,3 +348,32 @@ def test_unknown_extension_is_listed_without_structure(result: ProjectAnalysisRe
     assert info.language is Language.UNKNOWN
     assert info.structure_supported is False
     assert info.symbols == []
+
+
+def test_credential_folders_and_names_are_secret(tmp_path: Path) -> None:
+    """Regression (Module 14): credentials identified by folder or by well-known name are never scanned."""
+    from app.services.project_intelligence.scanner import is_secret_path, scan_directory
+
+    for path in (
+        ".aws/credentials",
+        "a/.kube/config",
+        ".ssh/config",
+        "credentials.json",
+        "secrets.yaml",
+        "infra/prod.tfstate",
+        ".env.local",
+        "keys/id_ed25519",
+    ):
+        assert is_secret_path(path), path
+    for path in ("src/credentials.py", "docs/secrets.md", ".env.example", "aws/handler.py", "kube/README.md"):
+        assert not is_secret_path(path), path
+
+    (tmp_path / ".aws").mkdir()
+    (tmp_path / ".aws" / "credentials").write_text("aws_secret_access_key = FAKE\n")
+    (tmp_path / "secrets.yaml").write_text("token: FAKE\n")
+    (tmp_path / "app.py").write_text("x = 1\n")
+    result = scan_directory(tmp_path)
+    assert [f.path for f in result.files] == ["app.py"]
+    reasons = {s.path: s.reason for s in result.skipped}
+    assert reasons[".aws"] == "secret directory"
+    assert reasons["secrets.yaml"] == "secret file"

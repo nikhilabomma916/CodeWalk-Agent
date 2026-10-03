@@ -61,8 +61,12 @@ class AgentActionService:
         self.projects = projects
 
     def _owned(self, action_id: uuid.UUID) -> AgentAction:
+        # Lock the row for this decision: concurrent approve/reject requests for the same proposal
+        # run one after another, so only the first sees it pending (the rest get action_not_pending).
         action = self.session.scalar(
-            select(AgentAction).where(AgentAction.id == action_id, AgentAction.user_id == self.owner.id)
+            select(AgentAction)
+            .where(AgentAction.id == action_id, AgentAction.user_id == self.owner.id)
+            .with_for_update()
         )
         if action is None:
             audit("agent_action_not_found", level=logging.WARNING, user=self.owner.id, action=action_id)
