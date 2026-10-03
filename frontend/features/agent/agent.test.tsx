@@ -17,6 +17,7 @@ import {
 } from "@/testing/fake-api";
 import type { Diagnostic } from "@/types/diagnostics";
 
+import { useAgent } from "./agent-context";
 import { AgentPanel } from "./agent-panel";
 import { AgentReview } from "./agent-review";
 
@@ -438,32 +439,82 @@ describe("Agent panel", () => {
 });
 
 describe("Agent request races", () => {
-  it("never lets an older, slower run overwrite a newer one", async () => {
+  const OLD = "OLD ANSWER from the first run";
+  const NEW = "NEW ANSWER from the second run";
+
+  /**
+   * Run 1 answers only when the test says so (a slow server) and, like a real fetch, rejects
+   * when aborted; `abortDelayMs` delays that rejection to model it settling after newer work
+   * has started. Run 2 answers at once. Nothing depends on how fast the test runs.
+   */
+  function slowFirstRun(abortDelayMs = 0) {
     const routes = fakeBackend([
       ...projectRoutes,
       ["GET", /^\/agent\/status$/, () => STATUS(true)],
     ]);
     let calls = 0;
-    // Run 1 answers late and ignores cancellation (as a slow server would); run 2 answers at once.
+    let answerFirst: () => void = () => {};
     const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       if (!String(input).endsWith("/agent/run")) return routes(input, init);
       calls += 1;
-      const answer =
-        calls === 1 ? "OLD ANSWER from the first run" : "NEW ANSWER from the second run";
-      const delay = calls === 1 ? 300 : 10;
-      return new Promise<Response>((resolve) =>
-        setTimeout(() => resolve(json({ ...RUN, answer, actions: [] })), delay),
-      );
+      if (calls > 1) return Promise.resolve(json({ ...RUN, answer: NEW, actions: [] }));
+      return new Promise<Response>((resolve, reject) => {
+        answerFirst = () => resolve(json({ ...RUN, answer: OLD, actions: [] }));
+        init?.signal?.addEventListener("abort", () =>
+          setTimeout(() => reject(new DOMException("Aborted", "AbortError")), abortDelayMs),
+        );
+      });
     }) as unknown as typeof fetch;
+    return { fetchImpl, answerFirst: () => answerFirst() };
+  }
+
+  it("a cancelled run frees the panel and its late answer never appears", async () => {
+    const { fetchImpl, answerFirst } = slowFirstRun();
     renderAgent([], fetchImpl);
     await ask("First question");
     await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
-    const box = screen.getByLabelText("Ask about your project");
-    await userEvent.clear(box);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Cancelled/);
+    await userEvent.clear(screen.getByLabelText("Ask about your project"));
     await ask("Second question");
-    expect(await screen.findByText("NEW ANSWER from the second run")).toBeInTheDocument();
-    await new Promise((resolve) => setTimeout(resolve, 400)); // run 1 resolves now
-    expect(screen.queryByText("OLD ANSWER from the first run")).not.toBeInTheDocument();
-    expect(screen.getByText("NEW ANSWER from the second run")).toBeInTheDocument();
+    expect(await screen.findByText(NEW)).toBeInTheDocument();
+    answerFirst(); // the server's answer to the cancelled run arrives late
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(OLD)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cancelled/)).not.toBeInTheDocument();
+    expect(screen.getByText(NEW)).toBeInTheDocument();
+  });
+
+  it("never lets an older run that settles late overwrite a newer one", async () => {
+    // A second ask while the first is in flight (the context aborts the first itself); the
+    // first run's cancellation only settles after the second run has answered.
+    const { fetchImpl } = slowFirstRun(100);
+    function AskTwice() {
+      const { ask: askAgent } = useAgent();
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            void askAgent("First question", { includeFile: false, includeSelection: false });
+            void askAgent("Second question", { includeFile: false, includeSelection: false });
+          }}
+        >
+          ask-twice
+        </button>
+      );
+    }
+    vi.stubGlobal("fetch", fetchImpl);
+    render(
+      <WorkspaceProviders>
+        <Harness>
+          <AskTwice />
+          <AgentPanel />
+        </Harness>
+      </WorkspaceProviders>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "ask-twice" }));
+    expect(await screen.findByText(NEW)).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 200)); // run 1's rejection lands now
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(NEW)).toBeInTheDocument();
   });
 });
