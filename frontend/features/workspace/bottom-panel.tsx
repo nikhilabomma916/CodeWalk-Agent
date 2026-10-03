@@ -4,14 +4,16 @@ import { X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/ui/icon-button";
+import { AgentPanel } from "@/features/agent/agent-panel";
 import { AIReviewPanel } from "@/features/ai/ai-review-panel";
 import { IntelligencePanel } from "@/features/intelligence/intelligence-panel";
 import { ProblemsPanel, useAllDiagnostics } from "@/features/problems/problems-panel";
 
-type PanelTab = "problems" | "ai" | "project";
-const TABS: PanelTab[] = ["problems", "ai", "project"];
+type PanelTab = "problems" | "agent" | "ai" | "project";
+const TABS: PanelTab[] = ["problems", "agent", "ai", "project"];
 const TAB_LABEL: Record<PanelTab, string> = {
   problems: "Problems",
+  agent: "Agent",
   ai: "AI Review",
   project: "Project",
 };
@@ -64,6 +66,8 @@ export function BottomPanel({ onClose }: { onClose(): void }) {
       <div role="tabpanel" aria-labelledby={`panel-tab-${tab}`} className="min-h-0 flex-1">
         {tab === "problems" ? (
           <ProblemsPanel />
+        ) : tab === "agent" ? (
+          <AgentPanel />
         ) : tab === "ai" ? (
           <AIReviewPanel />
         ) : (

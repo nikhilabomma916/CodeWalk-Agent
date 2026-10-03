@@ -5,6 +5,7 @@ import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
 import { useBackendHealth } from "@/features/backend-status/use-backend-health";
+import { AgentProvider } from "@/features/agent/agent-context";
 import { AIAssistProvider } from "@/features/ai/ai-assist-context";
 import { CursorProvider } from "@/features/editor/cursor-context";
 import { EditorArea } from "@/features/editor/editor-area";
@@ -32,7 +33,9 @@ export function WorkspaceProviders({ children }: { children: ReactNode }) {
     <ConfirmProvider>
       <WorkspaceProvider>
         <CursorProvider>
-          <AIAssistProvider>{children}</AIAssistProvider>
+          <AIAssistProvider>
+            <AgentProvider>{children}</AgentProvider>
+          </AIAssistProvider>
         </CursorProvider>
       </WorkspaceProvider>
     </ConfirmProvider>

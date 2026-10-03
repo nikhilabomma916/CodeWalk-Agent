@@ -6,9 +6,12 @@ body), so page scripts cannot read it.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, Response, status
 
 from app.api.deps import AuthServiceDep, CurrentUserDep, LoginLimiterDep, RegisterLimiterDep, SettingsDep
+from app.core.audit import audit, fingerprint
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.schemas.auth import LoginRequest, RegisterRequest, UserResponse
@@ -63,6 +66,7 @@ def register(
 ) -> UserResponse:
     key = f"register:{_client(request)}"
     if (retry_after := limiter.retry_after(key)) is not None:
+        audit("rate_limited", level=logging.WARNING, scope="register", client=_client(request))
         raise TooManyAttemptsError(retry_after)
     limiter.record_failure(key)  # every attempt counts toward the limit
     user, token = auth.register(data)
@@ -90,11 +94,13 @@ def login(
 ) -> UserResponse:
     key = f"login:{_client(request)}:{data.email}"
     if (retry_after := limiter.retry_after(key)) is not None:
+        audit("rate_limited", level=logging.WARNING, scope="login", client=_client(request))
         raise TooManyAttemptsError(retry_after)
     try:
         user, token = auth.login(data)
     except InvalidCredentialsError:
         limiter.record_failure(key)
+        audit("login_failed", level=logging.WARNING, client=_client(request), account=fingerprint(data.email))
         raise
     limiter.reset(key)
     _set_session_cookie(response, settings, token)

@@ -4,11 +4,12 @@ CodeWalk Agent is an AI-assisted coding environment: a browser-based IDE that he
 write, understand, debug, and improve code, and eventually understand whole projects through
 deterministic analysis, project intelligence, retrieval-augmented generation (RAG), and AI agents.
 
-> **Status:** Batches 1–4 and Module 10 are complete: foundation, editor, and API (Modules 1–3);
-> code analysis, project intelligence, and PostgreSQL persistence (Modules 4–6); accounts,
-> application areas, and project ownership (Batch 3); AI code analysis, AI explanations and fix
-> suggestions, and project-aware search (Modules 7–9); semantic retrieval with hybrid ranking
-> (Module 10). Features listed under *Planned* are **not implemented yet**.
+> **Status:** Modules 1–13 are complete: foundation, editor, and API (Modules 1–3); code analysis,
+> project intelligence, and PostgreSQL persistence (Modules 4–6); accounts, application areas, and
+> project ownership (Batch 3); AI code analysis, AI explanations and fix suggestions, and
+> project-aware search (Modules 7–9); semantic retrieval with hybrid ranking (Module 10); the
+> project-aware agent with reviewed changes, its workspace integration, and security hardening
+> (Modules 11–13). Features listed under *Planned* are **not implemented yet**.
 
 ## Capabilities
 
@@ -50,6 +51,18 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
   and semantic lists are merged by reciprocal rank fusion) and an explicit *Index project* action.
   The AI features receive semantically similar code from other files after the deterministic
   context. See [Semantic retrieval](#semantic-retrieval-enabling-it).
+- **Project-aware agent (Module 11, optional)**: the *Agent* tab in the Coding workspace answers
+  questions about the project, the open file, a selection, or a problem, and can propose fixes. It
+  works through CodeWalk's own tools (deterministic search, semantic retrieval, project context,
+  file content, symbols, diagnostics, analysis), shows each step it took, and never runs code.
+  Proposed changes appear as cards with a side-by-side diff; **nothing changes until you choose
+  Apply**, and the server applies a change only if the file still has exactly the content the
+  proposal was made for. Applying saves a new file version, re-runs analysis, and updates the
+  editor and Problems panel. See [The agent](#the-agent).
+- **Security hardening (Module 13)**: ownership checks on every project-scoped endpoint, a security
+  audit log, strict API security headers (CSP, no-store, HSTS in production), production
+  configuration checks, rate limits on expensive operations, and prompt-injection defenses for
+  everything the AI reads. See [Security model](#security-model).
 - **File versions**: each saved content change of a server file is kept as a numbered version (newest
   50 per file by default) and can be viewed or restored through the API.
 - **Coding workspace** (Next.js + Monaco): project explorer, multi-file tabs, syntax highlighting for
@@ -82,8 +95,8 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
 
 ### Planned (future batches)
 
-Multi-agent assistance → Docker deployment. Account management (password change/reset, email
-verification, settings) is not implemented yet.
+Docker/deployment work (Module 14) and later modules. Account management (password change/reset,
+email verification, settings) is not implemented yet.
 
 ### AI assistance: enabling it
 
@@ -123,6 +136,68 @@ provider and without returning the key.
   A retrieval failure never fails an AI request; the context stays deterministic.
 
 This is retrieval for search and AI context only: there is no autonomous agent, and nothing is executed.
+
+### The agent
+
+The agent needs AI assistance to be enabled (above); it has no separate key. Ask in the *Agent* tab;
+by default the request includes the open file (its current, possibly unsaved, content), its
+problems, and the selection. The project itself is read on the server through the project id.
+
+- **How it works**: a bounded loop (`backend/app/services/agent/`). Each turn the model returns one
+  validated JSON step: call one tool, or answer, plus a short progress line. The backend's policy
+  decides whether the tool may run; the model never authorizes itself.
+- **Tools**: `get_diagnostics`, `analyze_code`, `search_project`, `semantic_search_project` (hybrid
+  search; falls back to deterministic search and says so when retrieval is unavailable),
+  `get_project_context`, `get_file_content`, `get_symbol`, `explain_error` (read-only), and
+  `propose_fix` (stores a proposal). There is no write tool and no code, shell, or SQL execution.
+  Paths must be files of the project's index, which excludes ignored folders and secret files.
+- **Limits**: steps (`CODEWALK_AGENT_MAX_STEPS`, 8), wall-clock time (240 s), kept context
+  (60,000 characters), proposals per run (3), repeated-call blocking, and a stop after 3 failed calls
+  in a row. Reaching a limit ends the run as `limit_reached`; provider errors end it as `failed`.
+- **Proposals**: validated whole-line edits against the saved file, stored with each range's
+  original text. `POST /agent/actions/{id}/approve` re-checks ownership, the file, its content hash,
+  and every original text before saving; otherwise the proposal is marked `stale` and nothing is
+  written. Reject changes nothing. Both decisions appear in History.
+- **What is stored**: the request, progress events, tool-call metadata (bounded arguments, no file
+  contents), the answer, and proposals. The model's reasoning is never requested or stored.
+- **Not streamed**: a run returns when it finishes; the UI shows elapsed time, then the steps. The
+  service emits events in order, so a streaming transport can be added without changing the loop.
+
+### Security model
+
+- **Authentication**: Argon2id password hashes; an opaque session token in an `httpOnly`,
+  `SameSite=Lax` cookie (`Secure` in production) of which only the SHA-256 is stored; sessions
+  expire (`CODEWALK_SESSION_TTL_HOURS`); logout deletes the session. Unknown emails and wrong
+  passwords look the same. The frontend's `/app` routes require a session.
+- **Authorization**: every project-scoped endpoint (projects, files, versions, analyses, search,
+  snippets, context, RAG indexing and status, AI with a project, agent runs and actions, history)
+  checks that the signed-in user owns the project; anyone else gets `404`. A project id from the
+  client is never trusted on its own.
+- **Paths**: project paths are validated as relative POSIX paths (no `..`, absolute or drive
+  paths, NUL bytes); folder scans resolve inside `CODEWALK_WORKSPACE_ROOT` without following
+  symlinks; secret files are never stored, and ignored folders are never searched, indexed, or given
+  to the AI.
+- **Prompt injection**: everything the AI reads from the project (code, comments, READMEs,
+  configuration, search results, retrieved chunks, tool results) is wrapped in data blocks with
+  `<`, `>` and `&` escaped, under a fixed system policy that states this data never contains
+  instructions. More importantly, the AI cannot act on injected text: tools, paths, limits, and
+  writes are enforced by the backend, and changes need the developer's approval.
+- **Writes**: only `approve` writes, after re-validating ownership, the file, its content, every
+  range, and the size of the change. Stale proposals are refused.
+- **Secrets**: provider keys and the database URL are server-side `SecretStr` settings, never
+  returned, logged, or sent to the browser (only `NEXT_PUBLIC_*` reaches the frontend). `.env` is
+  git-ignored; `.env.example` holds empty placeholders.
+- **HTTP**: CORS allow-list (no wildcard; HTTPS-only origins in production), an origin check on
+  state-changing requests, body-size limits, `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, `Permissions-Policy`, a `default-src 'none'` CSP and `Cache-Control:
+  no-store` on API responses, and HSTS in production. Production startup fails on insecure settings
+  (weak secret key, wildcard or `http://` origins, non-secure cookies).
+- **Rate limits** (per user or client, per window): sign-in, registration, AI requests, agent runs,
+  semantic queries, and indexing runs. They are **per process**: with several backend instances,
+  put them behind a shared store (the `AttemptLimiter` interface is the seam) or limit at a proxy.
+- **Audit log**: security events go to the `app.security` logger as `security.<event>` lines with
+  ids and codes only: failed logins (email as a short hash), rate limits, rejected origins,
+  cross-user project access, denied agent tools, and proposed / applied / rejected / stale changes.
 
 ### Planning documents and earlier work (from develop)
 
@@ -274,6 +349,8 @@ The repository-level `.env` is read by both the backend and the frontend (`backe
 | `RAG_EMBEDDING_PROVIDER`, `RAG_EMBEDDING_MODEL` | `voyage`; model (default `voyage-code-4`) |
 | `CODEWALK_RAG_TIMEOUT_SECONDS`, `CODEWALK_RAG_MAX_CHUNKS_PER_RUN` | provider timeout; chunks embedded per indexing run |
 | `CODEWALK_RAG_MAX_QUERIES`, `CODEWALK_RAG_MAX_INDEX_RUNS`, `CODEWALK_RAG_WINDOW_SECONDS` | query embeddings and indexing runs per user per window |
+| `CODEWALK_AGENT_MAX_STEPS`, `CODEWALK_AGENT_TIMEOUT_SECONDS`, `CODEWALK_AGENT_MAX_CONTEXT_CHARS`, `CODEWALK_AGENT_MAX_ACTIONS` | agent run limits (8 steps, 240 s, 60,000 chars, 3 proposals) |
+| `CODEWALK_AGENT_MAX_RUNS`, `CODEWALK_AGENT_WINDOW_SECONDS` | agent runs per user per window (then 429) |
 | `NEXT_PUBLIC_API_BASE_URL` | backend API base URL used by the browser |
 
 Production startup fails fast on an insecure configuration (missing or weak secret key, wildcard CORS).
@@ -322,6 +399,14 @@ credential is present in the environment, and is skipped otherwise.
 ownership tests run on real PostgreSQL + pgvector with `tests/embedding_stub.py`, a test-only
 hashed bag-of-words embedder that is **not** a real model and says nothing about retrieval quality.
 `tests/test_live_voyage.py` makes real embedding calls only when `VOYAGE_API_KEY` is set.
+
+**Agent and security tests** never need a provider either. `tests/db/test_agent_api.py` drives the
+real orchestrator with the test-only `StubProvider` acting as the model, including a confused or
+malicious one: unknown tools, path traversal, ignored and secret files, repeated calls, limits,
+provider failures, prompt injection, proposals (approve, reject, stale), rate limits, and ownership.
+`tests/db/test_security_api.py` checks every project-scoped endpoint against another user, signed-out
+requests, malformed ids, unsafe paths, oversized and cross-origin requests, and the audit log.
+`tests/db/test_live_agent.py` runs the agent against the real provider only when a key is set.
 
 **PostgreSQL tests** (`backend/tests/db`) run against a real database and are skipped, never faked,
 when `CODEWALK_TEST_DATABASE_URL` is unset. They rebuild the schema with the Alembic migrations, so

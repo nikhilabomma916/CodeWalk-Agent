@@ -23,6 +23,8 @@ from app.core.rate_limit import AttemptLimiter
 from app.db.models import User
 from app.db.session import Database
 from app.services.activity import HistoryService
+from app.services.agent.actions import AgentActionService
+from app.services.agent.service import AgentService
 from app.services.ai.service import AIAssistant, AIService
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.service import AnalysisService
@@ -196,3 +198,31 @@ def get_ai_assistant(
 
 ContextBuilderDep = Annotated[ProjectContextBuilder, Depends(get_context_builder)]
 AIAssistantDep = Annotated[AIAssistant, Depends(get_ai_assistant)]
+
+
+def get_agent_limiter(request: Request) -> AttemptLimiter:
+    limiter: AttemptLimiter = request.app.state.agent_limiter
+    return limiter
+
+
+def get_agent_service(
+    session: SessionDep,
+    settings: SettingsDep,
+    user: CurrentUserDep,
+    ai: AIServiceDep,
+    limiter: Annotated[AttemptLimiter, Depends(get_agent_limiter)],
+    search: SearchServiceDep,
+    builder: ContextBuilderDep,
+    engine: AnalysisEngineDep,
+) -> AgentService:
+    return AgentService(session, settings, user, ai, limiter, search, builder, engine)
+
+
+def get_agent_action_service(
+    session: SessionDep, user: CurrentUserDep, files: FileServiceDep, projects: ProjectServiceDep
+) -> AgentActionService:
+    return AgentActionService(session, user, files, projects)
+
+
+AgentServiceDep = Annotated[AgentService, Depends(get_agent_service)]
+AgentActionServiceDep = Annotated[AgentActionService, Depends(get_agent_action_service)]

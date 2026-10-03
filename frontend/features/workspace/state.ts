@@ -149,6 +149,8 @@ export type WorkspaceAction =
   | { type: "diagnostics/replaced"; source: string; path: ProjectPath; diagnostics: Diagnostic[] }
   | { type: "editor/reveal"; request: RevealRequest }
   | { type: "editor/replace"; request: ReplaceRequest }
+  /** The project source saved this content (e.g. an approved agent change): show it, marked saved. */
+  | { type: "editor/synced"; request: ReplaceRequest }
   | { type: "analysis/updated"; path: ProjectPath; analysis: FileAnalysis }
   | { type: "intelligence/updated"; intelligence: IntelligenceState };
 
@@ -330,6 +332,23 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
         buffers: {
           ...state.buffers,
           [action.request.path]: { ...buffer, content: action.request.content },
+        },
+        replace: action.request,
+      };
+    }
+
+    case "editor/synced": {
+      const buffer = state.buffers[action.request.path];
+      if (!buffer || buffer.status !== "ready") return state;
+      return {
+        ...state,
+        buffers: {
+          ...state.buffers,
+          [action.request.path]: {
+            ...buffer,
+            content: action.request.content,
+            savedContent: action.request.content,
+          },
         },
         replace: action.request,
       };
