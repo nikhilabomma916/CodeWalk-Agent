@@ -72,7 +72,24 @@ SECRET_FILE_PATTERNS = (
     ".netrc",
     ".git-credentials",
     "*.kdbx",
+    # Cloud / service credentials and secret stores identified by their file name.
+    "credentials.json",
+    "client_secret*.json",
+    "service-account*.json",
+    "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "*.tfstate",
+    "*.tfstate.backup",
+    ".pgpass",
+    ".htpasswd",
+    ".s3cfg",
+    ".boto",
+    ".dockercfg",
 )
+# Folders whose files are credentials as a rule (``.aws/credentials``, ``.kube/config``,
+# ``.docker/config.json``, ``.ssh/config``, ...). Every file below them is treated as a secret.
+SECRET_DIRECTORIES = frozenset({".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker"})
 SECRET_FILE_ALLOWLIST = frozenset({".env.example", ".env.sample", ".env.template"})
 TEMPORARY_FILE_PATTERNS = ("*.tmp", "*.temp", "*.swp", "*.swo", "*~", ".DS_Store", "Thumbs.db", "desktop.ini")
 
@@ -106,6 +123,13 @@ def is_secret_file(name: str) -> bool:
     if name in SECRET_FILE_ALLOWLIST:
         return False
     return any(fnmatch.fnmatch(name, pattern) for pattern in SECRET_FILE_PATTERNS)
+
+
+def is_secret_path(path: str) -> bool:
+    """A project-relative POSIX path that holds credentials: a secret file name, or any file
+    inside a credentials folder. Such files are never stored, searched, indexed, or given to the AI."""
+    *folders, name = path.split("/")
+    return any(folder in SECRET_DIRECTORIES for folder in folders) or is_secret_file(name)
 
 
 def is_temporary_file(name: str) -> bool:
@@ -187,7 +211,9 @@ def scan_directory(
                 result.skipped.append(SkippedEntry(relative, "ignored by .gitignore"))
                 continue
             if is_directory:
-                if entry.name in options.ignored_directories and (
+                if entry.name in SECRET_DIRECTORIES:
+                    result.skipped.append(SkippedEntry(relative, "secret directory"))
+                elif entry.name in options.ignored_directories and (
                     entry.name not in VIRTUALENV_NAMES or _is_virtualenv(path)
                 ):
                     result.skipped.append(SkippedEntry(relative, "ignored directory"))

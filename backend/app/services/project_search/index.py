@@ -22,15 +22,15 @@ from app.services.project_intelligence.models import (
     RelationshipKind,
     TargetKind,
 )
-from app.services.project_intelligence.scanner import DEFAULT_IGNORED_DIRECTORIES, is_secret_file
+from app.services.project_intelligence.scanner import DEFAULT_IGNORED_DIRECTORIES, is_secret_path
 
 Fingerprint = tuple[tuple[str, str | None], ...]
 
 
 def is_searchable(path: str) -> bool:
     """Ignored folders and secret files are never searched, even if a record exists."""
-    *folders, name = path.split("/")
-    return not any(folder in DEFAULT_IGNORED_DIRECTORIES for folder in folders) and not is_secret_file(name)
+    *folders, _ = path.split("/")
+    return not any(folder in DEFAULT_IGNORED_DIRECTORIES for folder in folders) and not is_secret_path(path)
 
 
 @dataclass

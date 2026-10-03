@@ -1,0 +1,107 @@
+# Module 14: pull-request validation. No private keys are needed: AI and embedding providers
+# are exercised through test doubles, and the live-provider smoke tests run only when the
+# repository defines the optional secrets (they are passed through env, never printed).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests on PostgreSQL + pgvector, migrations)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17-bookworm
+        env:
+          POSTGRES_USER: codewalk
+          POSTGRES_PASSWORD: codewalk_ci_password
+          POSTGRES_DB: codewalk_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U codewalk -d codewalk_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CODEWALK_TEST_DATABASE_URL: postgresql+psycopg://codewalk:codewalk_ci_password@127.0.0.1:5432/codewalk_test
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: |
+          uv sync --frozen
+          npm --prefix tools/typescript-analyzer ci --no-audit --no-fund
+      - name: Lint
+        run: uv run ruff check app tests
+      - name: Format
+        run: uv run ruff format --check app tests
+      - name: Types
+        run: uv run mypy
+      - name: Tests (unit, API, PostgreSQL, security, agent, RAG)
+        run: uv run pytest -p no:cacheprovider -ra
+      - name: Migrations (upgrade head + drift check)
+        env:
+          CODEWALK_DATABASE_URL: ${{ env.CODEWALK_TEST_DATABASE_URL }}
+        run: |
+          uv run alembic upgrade head
+          uv run alembic check
+
+  frontend:
+    name: Frontend (lint, format, types, tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  live-providers:
+    name: Live provider smoke tests (opt-in)
+    # Runs only on manual dispatch and only when a provider secret exists; otherwise skipped.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+      - run: uv sync --frozen
+      - name: Live AI and embedding providers (skipped when the secrets are absent)
+        run: uv run pytest -p no:cacheprovider -ra tests/test_live_ai_provider.py tests/test_live_voyage.py

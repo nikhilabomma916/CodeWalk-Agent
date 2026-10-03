@@ -8,7 +8,7 @@ from typing import Annotated
 from pydantic import AfterValidator, BaseModel, Field
 
 from app.core.exceptions import UnsafePathError
-from app.services.project_intelligence.scanner import is_secret_file
+from app.services.project_intelligence.scanner import is_secret_path
 from app.utils.paths import normalize_relative_path
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
@@ -38,7 +38,7 @@ def _validate_relative_path(value: str) -> str:
 
 def _validate_file_path(value: str) -> str:
     normalized = _validate_relative_path(value)
-    if is_secret_file(normalized.rsplit("/", 1)[-1]):
+    if is_secret_path(normalized):
         raise ValueError("secret files such as .env are not stored")
     return normalized
 

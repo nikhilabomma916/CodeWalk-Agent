@@ -20,7 +20,12 @@
     "format": "uv --directory backend run ruff format app tests && uv --directory backend run ruff check --fix app tests && npm --prefix frontend run format",
     "format:check": "uv --directory backend run ruff format --check app tests && npm --prefix frontend run format:check",
     "typecheck": "uv --directory backend run mypy && npm --prefix frontend run typecheck",
-    "check": "npm run lint && npm run format:check && npm run typecheck && npm test"
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
+    "test:all": "node scripts/test-all.mjs",
+    "test:all:docker": "node scripts/test-all.mjs --backend-docker",
+    "test:security": "uv --directory backend run pytest -p no:cacheprovider -ra tests/test_agent_unit.py tests/test_paths.py tests/test_config.py tests/db/test_security_api.py tests/db/test_secret_paths_api.py tests/db/test_ownership_api.py tests/db/test_auth_api.py tests/db/test_agent_api.py tests/db/test_fixture_projects_api.py tests/db/test_concurrency_api.py",
+    "test:perf": "uv --directory backend run python ../scripts/performance.py",
+    "test:runner": "node --test scripts/runner.test.mjs"
   },
   "engines": {
     "node": ">=20.9"
