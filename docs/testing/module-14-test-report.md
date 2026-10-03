@@ -40,7 +40,7 @@ Final run: `node scripts/test-all.mjs --backend-docker` — exit code 0, all 14 
 | Live provider tests | `test_live_ai_provider.py`, `test_live_voyage.py`, `db/test_live_agent.py` | not executed: no credentials | OPTIONAL LIVE TEST (3 SKIPPED) |
 | Migrations | `alembic upgrade head`, `alembic check` | head `7b3e1c9d4f62`, no drift | PASS |
 | Frontend lint / format / types | eslint, prettier --check, tsc | clean | PASS |
-| Frontend tests | vitest, 21 files | 181 passed (181) | PASS |
+| Frontend tests | vitest, 21 files | 182 passed (182) (after the CI fix below; 181 in the first final run) | PASS |
 | Frontend production build | `next build` | built | PASS |
 | Live stack | `npm run test:integration` against the running backend container, `codewalk` database and Next.js dev server | 12 passed; 68 requests in the backend access log during the run | PASS |
 | Performance | `npm run test:perf` (Parts A and B) | measured, see section 6 | PASS (measurements recorded) |
@@ -59,6 +59,8 @@ counted as passed.
 | F3 | The first regression runner split a quoted Docker command through the Windows shell, ran `env` instead of pytest, printed the database password, and reported PASS; a nested `node --test` also passed on failure (`NODE_TEST_CONTEXT`) | shell parsing; inherited environment | runner rewritten (`scripts/lib/runner.mjs`); log deleted; development password rotated and removed from tracked files | `scripts/runner.test.mjs` (9) |
 | F4 | Clicking a search result while no file was open opened the file at line 1 instead of the result's line (Module 9) | the reveal request was consumed before Monaco mounted | pending reveal applied on mount (nonce-tracked) | `features/editor/monaco-editor.test.tsx`; browser B-04 |
 | F5 | `.gitignore` rule `lib/` (Python packaging) silently excluded `scripts/lib/runner.mjs` from version control | over-broad ignore rule | `!scripts/lib/` exception | verified from a clean clone of the commit |
+
+| F6 | GitHub CI (first run, PR #10) failed in the frontend agent race test; it passed locally | the test's fake `fetch` ignored the abort signal (a real fetch never does), so the result depended on typing speed: locally run 1 had already finished, on CI the second question hit a disabled Ask button | test rewritten to honor the fetch contract with explicitly controlled timing, split into a cancel-flow test and a run-token-guard test | both pass 5/5 locally and 3/3 on Node 22 Linux; the guard test fails when the guard is removed |
 
 Details of F1–F3: `security-validation.md`.
 
