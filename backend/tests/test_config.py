@@ -130,6 +130,42 @@ def test_production_requires_https_origins_and_secure_cookies() -> None:
     assert production.docs_are_enabled is False
 
 
+def test_production_same_origin_deployment_allows_no_cross_origin_access() -> None:
+    """Behind the reverse proxy the frontend and API share one origin: no CORS origins needed."""
+    production = build_app(env="production", secret_key=STRONG_KEY, cors_origins=[])
+    with TestClient(production, base_url="https://codewalk.example.com") as client:
+        preflight = client.options(
+            "/api/v1/auth/login",
+            headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"},
+        )
+        assert "access-control-allow-origin" not in preflight.headers
+        foreign = client.post("/api/v1/auth/login", json={}, headers={"Origin": "https://evil.example"})
+        assert foreign.status_code == 403
+        assert foreign.json()["error"]["code"] == "origin_not_allowed"
+        # The API's own origin passes the origin check (and then fails validation normally).
+        own = client.post("/api/v1/auth/login", json={}, headers={"Origin": "https://codewalk.example.com"})
+        assert own.status_code != 403
+    with pytest.raises(ValidationError, match="Wildcard"):
+        make_settings(env="production", secret_key=STRONG_KEY, cors_origins=["*"])
+    with pytest.raises(ValidationError, match="https://"):
+        make_settings(env="production", secret_key=STRONG_KEY, cors_origins=["http://codewalk.example.com"])
+
+
+def test_settings_errors_never_echo_secret_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Startup errors land in container logs: they must not contain the configured secrets."""
+    password = "pw-" + "q" * 30
+    monkeypatch.setenv("CODEWALK_ENV", "production")
+    monkeypatch.setenv("CODEWALK_DATABASE_URL", f"postgresql+psycopg://codewalk:{password}@db:5432/codewalk")
+    monkeypatch.setenv("CODEWALK_SECRET_KEY", "short-but-secret")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-" + "k" * 30)
+    with pytest.raises(ValidationError) as caught:
+        Settings(_env_file=None)
+    message = str(caught.value)
+    assert "CODEWALK_SECRET_KEY" in message  # the reason is still reported
+    for secret in (password, "short-but-secret", "sk-test-"):
+        assert secret not in message
+
+
 def test_security_headers_on_api_and_docs() -> None:
     with TestClient(build_app()) as client:
         api = client.get("/api/v1/health")

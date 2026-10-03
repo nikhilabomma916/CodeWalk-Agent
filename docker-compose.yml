@@ -1,11 +1,34 @@
-# Local development services for CodeWalk Agent.
-#   docker compose up -d postgres      # start PostgreSQL
-#   docker compose down                # stop (data is kept in the named volume)
-#   docker compose down -v             # stop and delete all data
+# Local development services for CodeWalk Agent. See docs/deployment/local-docker.md.
 #
-# Credentials come from the repository .env (see .env.example); the defaults are
-# for local development only and the port is bound to localhost.
+#   docker compose up -d postgres              # database only (backend/frontend on the host)
+#   docker compose --profile app up -d --build # database + migrations + backend + frontend, hot reload
+#   docker compose --profile app down          # stop (data is kept in the named volume)
+#
+# Never run "down -v" here unless you intend to delete the development database: -v removes the
+# postgres-data volume and every project in it.
+#
+# Credentials come from the repository .env (see .env.example). Every port is bound to localhost.
+# The production stack is docker-compose.prod.yml (separate project, separate volume).
 name: codewalk
+
+x-dev-backend: &dev-backend
+  build:
+    context: ./backend
+  image: codewalk-backend:dev
+  environment:
+    CODEWALK_ENV: development
+    CODEWALK_HOST: 0.0.0.0
+    CODEWALK_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-codewalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}@postgres:5432/${POSTGRES_DB:-codewalk}
+    CODEWALK_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    CODEWALK_LOG_LEVEL: ${CODEWALK_LOG_LEVEL:-INFO}
+    # Optional; the app runs without them and reports AI/retrieval as unavailable.
+    CODEWALK_AI_ENABLED: ${CODEWALK_AI_ENABLED:-false}
+    ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    CODEWALK_AI_API_KEY: ${CODEWALK_AI_API_KEY:-}
+    RAG_ENABLED: ${RAG_ENABLED:-false}
+    VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+    # Bind-mounted sources on Windows/macOS do not deliver file events: poll for reloads.
+    WATCHFILES_FORCE_POLLING: "true"
 
 services:
   postgres:
@@ -30,5 +53,55 @@ services:
       timeout: 5s
       retries: 10
 
+  # --- Profile "app": the application in containers, with hot reload -------------------------
+  migrate:
+    <<: *dev-backend
+    profiles: [app]
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  backend:
+    <<: *dev-backend
+    profiles: [app]
+    restart: unless-stopped
+    init: true
+    # CODEWALK_ENV=development: python -m app runs uvicorn with --reload on /app/app.
+    volumes:
+      - ./backend/app:/app/app:ro
+    ports:
+      - "127.0.0.1:${CODEWALK_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  frontend:
+    profiles: [app]
+    build:
+      context: ./frontend
+      target: dev
+    image: codewalk-frontend:dev
+    restart: unless-stopped
+    init: true
+    environment:
+      # The browser calls the backend directly on its published port during development.
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:${CODEWALK_PORT:-8000}/api/v1
+    volumes:
+      - ./frontend:/app
+      # Linux dependencies and build cache stay in the container, not in the host checkout.
+      - frontend-node-modules:/app/node_modules
+      - frontend-next:/app/.next
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+
 volumes:
   postgres-data:
+  frontend-node-modules:
+  frontend-next:

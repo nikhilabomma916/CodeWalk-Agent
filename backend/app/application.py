@@ -103,7 +103,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         version=__version__,
         environment=settings.env.value,
         check_timeout_seconds=settings.health_check_timeout_seconds,
-        checks=[DatabaseHealthCheck(database)],
+        checks=[DatabaseHealthCheck(database, required=settings.is_production)],
     )
     app.state.database = database
     app.state.analysis_engine = AnalysisEngine.create_default(
