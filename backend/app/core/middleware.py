@@ -15,6 +15,7 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.exceptions import HTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.core.audit import audit
 from app.core.exceptions import error_response
 from app.core.logging import request_id_var
 
@@ -28,7 +29,14 @@ SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
 }
+# API responses are JSON: nothing in them may load or run anything, or be framed.
+API_CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+# The interactive docs pages load their own scripts and styles; they keep the browser default.
+_DOCS_PATHS = ("/docs", "/redoc")
+HSTS_VALUE = "max-age=31536000; includeSubDomains"
 
 
 class RequestContextMiddleware:
@@ -40,14 +48,20 @@ class RequestContextMiddleware:
     middleware, so browsers can read it, and still carries the request id.
     """
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, *, api_prefix: str = "/api", hsts: bool = False) -> None:
         self.app = app
+        self.api_prefix = api_prefix
+        # Strict-Transport-Security only when served over HTTPS (production); never in development.
+        self.hsts = hsts
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
+        path: str = scope.get("path", "")
+        is_api = path.startswith(self.api_prefix)
+        is_docs = path.startswith(_DOCS_PATHS)
         incoming = Headers(scope=scope).get(REQUEST_ID_HEADER)
         request_id = incoming if incoming and _VALID_REQUEST_ID.match(incoming) else uuid.uuid4().hex
         token = request_id_var.set(request_id)
@@ -64,6 +78,13 @@ class RequestContextMiddleware:
                 headers[REQUEST_ID_HEADER] = request_id
                 for name, value in SECURITY_HEADERS.items():
                     headers.setdefault(name, value)
+                if not is_docs:
+                    headers.setdefault("Content-Security-Policy", API_CONTENT_SECURITY_POLICY)
+                if is_api:
+                    # Responses carry one user's data: never store them in shared or browser caches.
+                    headers.setdefault("Cache-Control", "no-store")
+                if self.hsts:
+                    headers.setdefault("Strict-Transport-Security", HSTS_VALUE)
             await send(message)
 
         try:
@@ -166,6 +187,9 @@ class OriginCheckMiddleware:
         if origin is not None and origin not in self.allowed_origins:
             own_origin = f"{scope.get('scheme', 'http')}://{headers.get('host', '')}"
             if origin != own_origin:
+                audit(
+                    "origin_rejected", level=logging.WARNING, method=scope["method"], path=scope.get("path")
+                )
                 response = error_response(
                     403, "origin_not_allowed", "Requests from this origin are not allowed."
                 )

@@ -153,7 +153,13 @@ class AIService:
         return self.provider
 
     def run(
-        self, provider: AIProvider, system: str, user: str, output: type[ModelT]
+        self,
+        provider: AIProvider,
+        system: str,
+        user: str,
+        output: type[ModelT],
+        *,
+        timeout_seconds: float | None = None,
     ) -> tuple[ModelT, StructuredResult]:
         result = provider.generate_structured(
             StructuredRequest(
@@ -161,7 +167,9 @@ class AIService:
                 user=user,
                 schema=output_schema(output),
                 max_tokens=self.settings.ai_max_tokens,
-                timeout_seconds=self.settings.ai_timeout_seconds,
+                timeout_seconds=min(
+                    timeout_seconds or self.settings.ai_timeout_seconds, self.settings.ai_timeout_seconds
+                ),
                 effort=self.settings.ai_effort,
             )
         )

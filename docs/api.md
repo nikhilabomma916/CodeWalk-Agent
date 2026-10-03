@@ -297,6 +297,43 @@ All require sign-in; another user's project is `404`. Indexing errors:
 | 503 | `rag_disabled`, `rag_not_configured`, `rag_unavailable` | `RAG_ENABLED` off; no key / unknown provider; provider unreachable |
 | 504 | `rag_timeout` | provider timeout |
 
+## Agent (Module 11)
+
+All endpoints require sign-in and act on the signed-in user's projects only; another user's project,
+run, or action is `404`.
+
+| Method & path | Description |
+| --- | --- |
+| `GET /agent/status` | `{available, detail, tools[{name, description, permission}], max_steps, max_actions}`; no provider call |
+| `POST /agent/run` | `{project_id, message ≤ 4000, file_path?, code?, selection?{start_line, start_column, end_line, end_column}, diagnostics ≤ 50}` → run |
+| `GET /agent/runs/{run_id}` | a stored run |
+| `GET /agent/runs/{run_id}/events` | its progress events |
+| `POST /agent/actions/{action_id}/approve` | apply a pending proposal (re-validated) → `{action, file{file_id, path, content, content_hash, version}, diagnostics[]}` |
+| `POST /agent/actions/{action_id}/reject` | reject a pending proposal → `{action, file: null}` |
+
+A **run** has `id`, `project_id`, `status` (`completed` / `limit_reached` / `failed`), `message`,
+`file_path`, `answer`, `provider`, `model`, `error{code, message}`, `events[]` (`type`: started,
+planning, tool_started, tool_completed, tool_failed, tool_denied, action_proposed, response,
+limit_reached, completed, failed; plus `message`, `tool`, `at`, `data`), `tool_calls[]` (`tool`,
+`permission`, bounded `arguments`, `status` ok / error / denied, `summary`, `duration_ms`,
+`error_code`), `actions[]`, `warnings[]`, `duration_ms`, timestamps. Provider failures during a run
+return `200` with `status: failed`; nothing about the model's reasoning is included.
+
+An **action** (proposed change) has `id`, `run_id`, `status` (`pending` / `applied` / `rejected` /
+`stale`), `file_path`, `summary`, `explanation`, `changes[]` (`start_line`, `start_column`,
+`end_line`, `end_column`, `original_text`, `replacement_text`), `diff`, `base_content_hash`,
+`validation`, `decided_at`, `result` (version and diagnostic count, or the stale reason).
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 409 | `action_not_pending` | already applied, rejected, or stale |
+| 409 | `stale_action` | the file changed (or moved) since the proposal; nothing was written |
+| 409 | `project_read_only` | folder-linked projects cannot be edited |
+| 413 | `source_too_large` | the open file exceeds `CODEWALK_MAX_SOURCE_BYTES` |
+| 422 | `invalid_agent_request` | selection or diagnostics outside the open file |
+| 429 | `too_many_agent_runs` | per-user run limit (`Retry-After`) |
+| 503 | `ai_disabled`, `ai_not_configured` | AI assistance is off or has no credential |
+
 ## Errors
 
 All errors share one shape:

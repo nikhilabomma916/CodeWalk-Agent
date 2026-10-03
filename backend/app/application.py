@@ -115,6 +115,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
     app.state.ai_service = AIService(settings)
     app.state.search_index_cache = IndexCache()
     app.state.retrieval_service = RetrievalService(settings)
+    app.state.agent_limiter = AttemptLimiter(settings.agent_max_runs, settings.agent_window_seconds)
     app.state.login_limiter = AttemptLimiter(settings.login_max_attempts, settings.login_window_seconds)
     app.state.register_limiter = AttemptLimiter(
         settings.register_max_attempts, settings.register_window_seconds
@@ -125,7 +126,9 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
     # Middleware added last runs first: CORS -> request context -> origin check -> body limit -> routes.
     app.add_middleware(BodySizeLimitMiddleware, max_body_bytes=settings.max_request_body_bytes)
     app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.cors_origins)
-    app.add_middleware(RequestContextMiddleware)
+    app.add_middleware(
+        RequestContextMiddleware, api_prefix=settings.api_v1_prefix, hsts=settings.is_production
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,

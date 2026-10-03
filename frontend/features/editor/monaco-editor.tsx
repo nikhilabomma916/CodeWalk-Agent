@@ -7,6 +7,8 @@ import { useEffect, useRef } from "react";
 import type { EditorSettings, ReplaceRequest, RevealRequest } from "@/features/workspace/state";
 import type { Diagnostic } from "@/types/diagnostics";
 
+import type { SelectionInfo } from "./cursor-context";
+
 import {
   ANALYSIS_MARKER_OWNER,
   configureMonaco,
@@ -33,7 +35,12 @@ export interface MonacoEditorProps {
   replace?: ReplaceRequest | null;
   onChange(path: string, content: string): void;
   onSave(path: string): void;
-  onCursor(line: number, column: number, selectedChars: number): void;
+  onCursor(
+    line: number,
+    column: number,
+    selectedChars: number,
+    selection: SelectionInfo | null,
+  ): void;
   onReady(editor: editor.IStandaloneCodeEditor | null): void;
 }
 
@@ -70,7 +77,17 @@ export default function MonacoEditor(props: MonacoEditorProps) {
         (total, selection) => total + model.getValueLengthInRange(selection),
         0,
       );
-      latest.current.onCursor(position.lineNumber, position.column, selectedChars);
+      const primary = instance.getSelection();
+      const selection =
+        primary && !primary.isEmpty()
+          ? {
+              startLine: primary.startLineNumber,
+              startColumn: primary.startColumn,
+              endLine: primary.endLineNumber,
+              endColumn: primary.endColumn,
+            }
+          : null;
+      latest.current.onCursor(position.lineNumber, position.column, selectedChars, selection);
     };
     instance.onDidChangeCursorSelection(reportCursor);
     instance.onDidChangeModel(reportCursor);
