@@ -13,6 +13,10 @@ export const SYMBOL_KINDS = [
 ] as const;
 export type SymbolKind = (typeof SYMBOL_KINDS)[number];
 
+/** deterministic (Module 9, default), semantic (embeddings), or hybrid (both, fused by rank). */
+export const SEARCH_MODES = ["deterministic", "semantic", "hybrid"] as const;
+export type SearchMode = (typeof SEARCH_MODES)[number];
+
 const snippetSchema = z.object({
   file_path: z.string(),
   start_line: z.number(),
@@ -31,11 +35,23 @@ const resultSchema = z.object({
   end_line: z.number().nullable(),
   column: z.number().nullable(),
   score: z.number(),
-  score_details: z.object({ base: z.number(), coverage: z.number(), context_bonus: z.number() }),
+  score_details: z
+    .object({ base: z.number(), coverage: z.number(), context_bonus: z.number() })
+    .nullable(),
   match_type: z.string(),
   match_reason: z.string(),
   snippet: snippetSchema.nullable(),
   related_symbols: z.array(z.string()),
+  semantic_similarity: z.number().nullable().optional(),
+  fusion: z
+    .object({
+      rrf_score: z.number(),
+      k: z.number(),
+      deterministic_rank: z.number().nullable(),
+      semantic_rank: z.number().nullable(),
+    })
+    .nullable()
+    .optional(),
 });
 export type SearchResult = z.infer<typeof resultSchema>;
 
@@ -47,6 +63,9 @@ const responseSchema = z.object({
   truncated: z.boolean(),
   indexed_files: z.number(),
   ranking: z.string(),
+  mode: z.enum(SEARCH_MODES).optional(),
+  mode_used: z.enum(SEARCH_MODES).optional(),
+  warnings: z.array(z.string()).optional().default([]),
 });
 export type SearchResponse = z.infer<typeof responseSchema>;
 
@@ -56,6 +75,7 @@ export interface SearchInput {
   symbolType?: SymbolKind;
   currentFile?: string;
   limit?: number;
+  mode?: SearchMode;
 }
 
 export async function searchProject(
@@ -70,6 +90,7 @@ export async function searchProject(
       query: input.query,
       limit: input.limit ?? 50,
       current_file: input.currentFile,
+      mode: input.mode && input.mode !== "deterministic" ? input.mode : undefined,
       filters: { language: input.language || undefined, symbol_type: input.symbolType },
     },
     schema: responseSchema,

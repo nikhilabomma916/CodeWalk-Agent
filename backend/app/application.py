@@ -29,6 +29,7 @@ from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
 from app.services.health import HealthService
 from app.services.project_search.index import IndexCache
+from app.services.retrieval.service import RetrievalService
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,13 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         logger.info(
             "AI assistance: %s",
             f"available ({ai_status.provider}, {ai_status.model})" if ai_status.available else "unavailable",
+        )
+        rag_status = app.state.retrieval_service.status()
+        logger.info(
+            "Semantic retrieval: %s",
+            f"available ({rag_status.provider}, {rag_status.model})"
+            if rag_status.available
+            else "unavailable",
         )
         logger.info(
             "Persistence: %s; workspace scanning: %s",
@@ -106,6 +114,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
 
     app.state.ai_service = AIService(settings)
     app.state.search_index_cache = IndexCache()
+    app.state.retrieval_service = RetrievalService(settings)
     app.state.login_limiter = AttemptLimiter(settings.login_max_attempts, settings.login_window_seconds)
     app.state.register_limiter = AttemptLimiter(
         settings.register_max_attempts, settings.register_window_seconds

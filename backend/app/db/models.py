@@ -1,5 +1,5 @@
 """Persistence model: users and login sessions, projects, files and their versions,
-analyses, diagnostics, and the per-user activity history."""
+analyses, diagnostics, the per-user activity history, and embedded code chunks."""
 
 from __future__ import annotations
 
@@ -25,7 +25,9 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, CreatedAtMixin, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.vector import Vector
 from app.services.analysis.models import DiagnosticCategory, Severity
+from app.services.retrieval.base import EMBEDDING_DIMENSIONS
 
 MAX_PATH_LENGTH = 1024
 
@@ -247,4 +249,44 @@ class ActivityEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __table_args__ = (
         Index("ix_activity_events_user_id_created_at", "user_id", "created_at"),
         Index("ix_activity_events_project_id_created_at", "project_id", "created_at"),
+    )
+
+
+class CodeChunk(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """One embedded piece of a project file (a symbol or a block of lines) for semantic retrieval.
+
+    The source text is not copied: snippets are read from ``files.content``. A chunk is current
+    while its ``content_hash`` equals the file's; edited files keep their old chunks (never
+    returned) until the next indexing run replaces them. ``chunk_hash`` lets that run reuse the
+    vectors of unchanged chunks instead of embedding them again.
+    """
+
+    __tablename__ = "code_chunks"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    # The file's content hash when the chunk was embedded.
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Hash of the exact text sent to the embedding provider (including its path/symbol header).
+    chunk_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_line: Mapped[int] = mapped_column(Integer, nullable=False)
+    symbol_name: Mapped[str | None] = mapped_column(String(255))
+    symbol_kind: Mapped[str | None] = mapped_column(String(32))
+    embedding_model: Mapped[str] = mapped_column(String(100), nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSIONS), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("file_id", "embedding_model", "chunk_index", name="uq_code_chunks_file_model_index"),
+        Index("ix_code_chunks_project_id_embedding_model", "project_id", "embedding_model"),
+        Index("ix_code_chunks_file_id_chunk_hash", "file_id", "chunk_hash"),
+        Index(
+            "ix_code_chunks_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )

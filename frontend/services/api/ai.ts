@@ -36,6 +36,7 @@ const contextSchema = z.object({
   files: z.array(z.string()),
   symbols: z.array(z.string()),
   snippet_count: z.number(),
+  semantic_snippet_count: z.number().optional().default(0),
   truncated: z.boolean(),
 });
 

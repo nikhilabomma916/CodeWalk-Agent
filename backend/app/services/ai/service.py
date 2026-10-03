@@ -2,8 +2,9 @@
 
 ``AIService`` (one per application) owns provider selection, status, abuse
 limits, and calling + validating the provider. ``AIAssistant`` (one per request)
-adds the signed-in user's context: project ownership checks, deterministic
-project context (Module 9), normalization of the answer, and persistence.
+adds the signed-in user's context: project ownership checks, project context
+(Module 9 deterministic selection, plus Module 10 semantic matches when
+available), normalization of the answer, and persistence.
 
 Flow for every task:
   code + deterministic diagnostics -> (project context) -> prompt -> provider
@@ -75,6 +76,7 @@ from app.services.project_search.context import ProjectContextBuilder
 from app.services.project_search.index import IndexCache
 from app.services.project_search.service import ProjectSearchService
 from app.services.projects import ProjectService
+from app.services.retrieval.service import SemanticRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -198,13 +200,20 @@ class AIAssistant:
     """Per-request AI operations for the signed-in user."""
 
     def __init__(
-        self, session: Session, settings: Settings, owner: User, ai: AIService, search_cache: IndexCache
+        self,
+        session: Session,
+        settings: Settings,
+        owner: User,
+        ai: AIService,
+        search_cache: IndexCache,
+        retriever: SemanticRetriever | None = None,
     ) -> None:
         self.session = session
         self.settings = settings
         self.owner = owner
         self.ai = ai
         self.search_cache = search_cache
+        self.retriever = retriever
 
     # --- preparation ---------------------------------------------------------------------
 
@@ -261,7 +270,9 @@ class AIAssistant:
                 raise NotFoundError("The file is not part of this project.", code="file_not_found")
             try:
                 built = ProjectContextBuilder(
-                    ProjectSearchService(self.session, self.settings, self.owner, self.search_cache)
+                    ProjectSearchService(
+                        self.session, self.settings, self.owner, self.search_cache, retriever=self.retriever
+                    )
                 ).build(
                     project.id,
                     current_file=request.file_path,
@@ -282,13 +293,21 @@ class AIAssistant:
                     if s.file_path != request.file_path
                 ]
                 context_block = render_context(snippets)
+                semantic = built.metadata.get("semantic") or {}
                 context = ContextSummary(
                     used=bool(snippets),
                     files=sorted({s.file_path for s in snippets}),
                     symbols=[s.qualified_name for s in built.symbols],
                     snippet_count=len(snippets),
+                    semantic_snippet_count=sum(1 for s in snippets if s.reason.startswith("semantically")),
                     truncated=bool(built.metadata.get("truncated")),
                 )
+                rag_enabled = self.retriever is not None and self.retriever.service.settings.rag_enabled
+                if rag_enabled and not semantic.get("used") and semantic.get("detail"):
+                    detail = str(semantic["detail"]).rstrip(".")
+                    warnings.append(
+                        f"Semantic context was not added ({detail}); project context is deterministic."
+                    )
         return _Prepared(
             path=request.file_path,
             language=language,

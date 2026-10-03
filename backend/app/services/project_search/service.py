@@ -1,15 +1,22 @@
-"""Project-aware search over one user's stored project (Module 9).
+"""Project-aware search over one user's stored project (Module 9, extended by Module 10).
 
 Search reads only the caller's own project (ownership is checked by
 ProjectService) and only stored file records, never the filesystem. Results,
 snippets, and response sizes are bounded.
+
+The deterministic search below is the default and is unchanged by Module 10. The
+``semantic`` and ``hybrid`` modes add embedding similarity from ``SemanticRetriever``;
+hybrid fuses the two ranked lists with reciprocal rank fusion. When semantic
+retrieval is unavailable or fails, the response falls back to deterministic
+results and says so in ``warnings``.
 """
 
 from __future__ import annotations
 
 import posixpath
 import uuid
-from collections.abc import Iterator
+from collections.abc import Hashable, Iterator
+from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,25 +26,35 @@ from app.core.exceptions import NotFoundError
 from app.db.models import Project, ProjectFile, User
 from app.repositories.files import FileRepository
 from app.schemas.search import (
+    FusionDetails,
     MatchType,
     ScoreDetails,
+    SearchMode,
     SearchRequest,
     SearchResponse,
     SearchResult,
     Snippet,
     SnippetRequest,
 )
-from app.services.project_intelligence.models import CodeSymbol
+from app.services.project_intelligence.models import CodeSymbol, SymbolKind
 from app.services.project_intelligence.service import ProjectIntelligenceService
 from app.services.project_search import ranking
 from app.services.project_search.index import IndexCache, IndexedFile, ProjectIndex, fingerprint_of
 from app.services.projects import ProjectService
+from app.services.retrieval import fusion
+from app.services.retrieval.base import RetrievalError
+
+if TYPE_CHECKING:
+    from app.services.retrieval.service import SemanticHit, SemanticRetriever
 
 MAX_SNIPPET_LINES = 12
 MAX_LINE_CHARS = 300
 MAX_TEXT_MATCHES_PER_FILE = 5
 MAX_CANDIDATES = 1000
 MAX_RELATED_SYMBOLS = 8
+# List lengths fed into rank fusion (hybrid mode).
+FUSE_DETERMINISTIC = 50
+FUSE_SEMANTIC = 20
 
 
 def make_snippet(
@@ -68,11 +85,19 @@ def related_symbols(file: IndexedFile, symbol: CodeSymbol | None) -> list[str]:
 
 
 class ProjectSearchService:
-    def __init__(self, session: Session, settings: Settings, owner: User, cache: IndexCache) -> None:
+    def __init__(
+        self,
+        session: Session,
+        settings: Settings,
+        owner: User,
+        cache: IndexCache,
+        retriever: SemanticRetriever | None = None,
+    ) -> None:
         self.session = session
         self.settings = settings
         self.owner = owner
         self.cache = cache
+        self.retriever = retriever
         self.projects = ProjectService(session, settings, owner)
         self.files = FileRepository(session)
 
@@ -102,7 +127,7 @@ class ProjectSearchService:
     # --- search --------------------------------------------------------------------------
 
     def search(self, project_id: uuid.UUID, request: SearchRequest) -> SearchResponse:
-        _, index = self.project_index(project_id)
+        project, index = self.project_index(project_id)
         query = request.query.strip()
         query_terms = ranking.terms(query)
         if request.current_file is not None and request.current_file not in index.files:
@@ -123,15 +148,141 @@ class ProjectSearchService:
             if len(candidates) >= MAX_CANDIDATES:
                 break
         candidates.sort(key=lambda r: (-r.score, r.file_path, r.line or 0))
-        return SearchResponse(
-            query=query,
-            terms=query_terms,
-            results=candidates[: request.limit],
-            total=len(candidates),
-            truncated=len(candidates) > request.limit,
-            indexed_files=len(index.files),
-            ranking=ranking.RANKING_DESCRIPTION,
+
+        warnings: list[str] = []
+
+        def respond(results: list[SearchResult], mode_used: SearchMode, description: str) -> SearchResponse:
+            return SearchResponse(
+                query=query,
+                terms=query_terms,
+                results=results[: request.limit],
+                total=len(results),
+                truncated=len(results) > request.limit,
+                indexed_files=len(index.files),
+                ranking=description,
+                mode=request.mode,
+                mode_used=mode_used,
+                warnings=warnings,
+            )
+
+        if request.mode is SearchMode.DETERMINISTIC:
+            return respond(candidates, SearchMode.DETERMINISTIC, ranking.RANKING_DESCRIPTION)
+
+        semantic = self._semantic_results(project, index, query, request, warnings)
+        if semantic is None:
+            return respond(candidates, SearchMode.DETERMINISTIC, ranking.RANKING_DESCRIPTION)
+        if request.mode is SearchMode.SEMANTIC:
+            return respond(semantic, SearchMode.SEMANTIC, self._semantic_description())
+        return respond(self._fuse(candidates, semantic), SearchMode.HYBRID, fusion.DESCRIPTION)
+
+    # --- semantic and hybrid (Module 10) -------------------------------------------------
+
+    def _semantic_description(self) -> str:
+        model = self.retriever.model if self.retriever else None
+        return (
+            f"semantic: cosine similarity between the query and code-chunk embeddings ({model}); "
+            "higher is more similar."
         )
+
+    def _semantic_results(
+        self, project: Project, index: ProjectIndex, query: str, request: SearchRequest, warnings: list[str]
+    ) -> list[SearchResult] | None:
+        """Semantic matches as search results, or None (with a warning) when unavailable."""
+        allowed = request.filters.match_types
+        if allowed is not None and MatchType.SEMANTIC not in allowed:
+            warnings.append("Semantic matches were excluded by the match_types filter.")
+            return None
+        if self.retriever is None or not self.retriever.available:
+            status = self.retriever.service.status() if self.retriever else None
+            detail = status.detail if status and status.detail else "Semantic retrieval is not available."
+            warnings.append(f"{detail} Showing deterministic results.")
+            return None
+        filters = request.filters
+        try:
+            hits = self.retriever.search(
+                project,
+                index,
+                query,
+                limit=max(request.limit, FUSE_SEMANTIC),
+                language=filters.language,
+                path_prefix=filters.path_prefix,
+                symbol_kind=filters.symbol_type.value if filters.symbol_type else None,
+            )
+        except RetrievalError as exc:
+            warnings.append(f"Semantic retrieval failed: {exc.message} Showing deterministic results.")
+            return None
+        coverage = self.retriever.index_status(project, index)
+        if coverage.indexed_files == 0:
+            warnings.append("This project has no semantic index yet: index it to get semantic matches.")
+        elif coverage.stale_files:
+            warnings.append(
+                f"{coverage.stale_files} file(s) changed since the last indexing; their semantic matches are "
+                "missing until the project is indexed again."
+            )
+        return [self._semantic_result(index, hit) for hit in hits]
+
+    @staticmethod
+    def _semantic_result(index: ProjectIndex, hit: SemanticHit) -> SearchResult:
+        file = index.files[hit.file_path]
+        named = [s for s in file.symbols if s.qualified_name == hit.symbol_name]
+        symbol = next((s for s in named if hit.start_line <= s.line <= hit.end_line), None) or next(
+            iter(named), None
+        )
+        kind = symbol.kind if symbol else (SymbolKind(hit.symbol_kind) if hit.symbol_kind else None)
+        return SearchResult(
+            file_path=file.path,
+            symbol_name=symbol.name if symbol else None,
+            symbol_type=kind,
+            qualified_name=hit.symbol_name,
+            language=file.language,
+            line=hit.start_line,
+            end_line=hit.end_line,
+            column=symbol.column if symbol and symbol.line == hit.start_line else 1,
+            score=hit.similarity,
+            score_details=None,
+            match_type=MatchType.SEMANTIC,
+            match_reason=f"semantically similar to the query (cosine similarity {hit.similarity:.3f})",
+            snippet=make_snippet(file, hit.start_line, hit.end_line),
+            related_symbols=related_symbols(file, symbol),
+            semantic_similarity=hit.similarity,
+        )
+
+    @staticmethod
+    def _fuse(deterministic: list[SearchResult], semantic: list[SearchResult]) -> list[SearchResult]:
+        """Reciprocal rank fusion; a location found by both lists becomes one result."""
+        by_key: dict[Hashable, SearchResult] = {}
+        det_keys: list[Hashable] = []
+        for position, result in enumerate(deterministic[:FUSE_DETERMINISTIC]):
+            key: Hashable = (result.file_path, result.line)
+            if key in by_key:
+                key = (result.file_path, result.line, position)  # a second match on the same line
+            by_key[key] = result
+            det_keys.append(key)
+        sem_keys: list[Hashable] = []
+        similarity: dict[Hashable, float] = {}
+        for result in semantic[:FUSE_SEMANTIC]:
+            key = (result.file_path, result.line)
+            sem_keys.append(key)
+            similarity.setdefault(key, result.semantic_similarity or 0.0)
+            by_key.setdefault(key, result)
+        fused: list[SearchResult] = []
+        for item in fusion.rrf(det_keys, sem_keys):
+            base = by_key[item.key]
+            fused.append(
+                base.model_copy(
+                    update={
+                        "score": round(item.score, 6),
+                        "semantic_similarity": similarity.get(item.key, base.semantic_similarity),
+                        "fusion": FusionDetails(
+                            rrf_score=round(item.score, 6),
+                            k=fusion.K,
+                            deterministic_rank=item.deterministic_rank,
+                            semantic_rank=item.semantic_rank,
+                        ),
+                    }
+                )
+            )
+        return fused
 
     @staticmethod
     def _filtered_files(index: ProjectIndex, request: SearchRequest) -> Iterator[IndexedFile]:

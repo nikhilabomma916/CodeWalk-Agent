@@ -78,6 +78,29 @@ class Settings(BaseSettings):
     ai_max_requests: int = Field(default=30, ge=1, le=10_000)
     ai_window_seconds: int = Field(default=600, ge=1, le=86_400)
 
+    # Semantic retrieval (Module 10): code embeddings in PostgreSQL (pgvector). Off unless enabled
+    # AND an embedding credential is present; deterministic search never depends on it.
+    # Read from the unprefixed RAG_ENABLED, RAG_EMBEDDING_PROVIDER, RAG_EMBEDDING_MODEL, VOYAGE_API_KEY;
+    # the tuning settings below use the usual CODEWALK_ prefix.
+    rag_enabled: bool = Field(default=False, validation_alias="rag_enabled")
+    rag_embedding_provider: str | None = Field(  # "voyage" (default when unset)
+        default=None,
+        validation_alias="rag_embedding_provider",
+    )
+    rag_embedding_model: str | None = Field(  # provider default when unset
+        default=None, validation_alias="rag_embedding_model"
+    )
+    voyage_api_key: SecretStr | None = Field(default=None, validation_alias="voyage_api_key")
+    rag_timeout_seconds: float = Field(default=30.0, gt=0, le=300)
+    # Query embeddings (semantic/hybrid searches, AI context) allowed per user within the window;
+    # past it, searches fall back to deterministic results with a warning.
+    rag_max_queries: int = Field(default=120, ge=1, le=100_000)
+    # Indexing runs allowed per user within the window (then HTTP 429).
+    rag_max_index_runs: int = Field(default=10, ge=1, le=10_000)
+    rag_window_seconds: int = Field(default=600, ge=1, le=86_400)
+    # Chunks embedded by one indexing run; a larger project is indexed over several runs.
+    rag_max_chunks_per_run: int = Field(default=2000, ge=1, le=50_000)
+
     secret_key: SecretStr = SecretStr("")
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
@@ -149,7 +172,9 @@ class Settings(BaseSettings):
     def _upper_log_level(cls, value: object) -> object:
         return value.upper() if isinstance(value, str) else value
 
-    @field_validator("ai_provider", "ai_model", mode="before")
+    @field_validator(
+        "ai_provider", "ai_model", "rag_embedding_provider", "rag_embedding_model", mode="before"
+    )
     @classmethod
     def _blank_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -181,7 +206,7 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("database_url", "ai_api_key", "anthropic_api_key", mode="before")
+    @field_validator("database_url", "ai_api_key", "anthropic_api_key", "voyage_api_key", mode="before")
     @classmethod
     def _blank_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():

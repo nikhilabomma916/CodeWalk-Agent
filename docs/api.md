@@ -240,14 +240,15 @@ window of lines around the focus (with a warning).
 | 413 | `source_too_large`, `ai_context_too_large` | code too large; provider says the request is too large |
 | 502 | `ai_provider_error`, `ai_malformed_response` | provider rejected the request; unusable answer |
 
-## Project search and context (Module 9)
+## Project search and context (Modules 9 and 10)
 
-Deterministic (no embeddings or vectors), owner-only, over the project's stored files (never the
-filesystem). Ignored folders (`node_modules`, `.venv`, …) and secret files are never searched.
+Owner-only, over the project's stored files (never the filesystem). Ignored folders (`node_modules`,
+`.venv`, …) and secret files are never searched or indexed. Deterministic by default; `mode` adds
+semantic retrieval (Module 10) when it is available.
 
 | Method & path | Description |
 | --- | --- |
-| `POST /projects/{id}/search` | `{query, filters?: {language, symbol_type, path_prefix, match_types}, limit ≤ 100, current_file?}` |
+| `POST /projects/{id}/search` | `{query, filters?: {language, symbol_type, path_prefix, match_types}, limit ≤ 100, current_file?, mode?: deterministic \| semantic \| hybrid}` |
 | `POST /projects/{id}/snippet` | `{file_path, line, before ≤ 20, after ≤ 40}`: a bounded excerpt |
 | `POST /projects/{id}/context` | `{current_file, line?, query?, current_symbol?, diagnostics?}` → `RelevantContext` |
 
@@ -260,9 +261,37 @@ A search result has `file_path`, `symbol_name`, `symbol_type`, `qualified_name`,
 that import it get +10. Query terms are split on camelCase and snake_case ("UserService" → user,
 service) and match name parts by prefix.
 
+**Modes (Module 10).** `semantic` results have `match_type: "semantic"`, `score` = cosine similarity
+(also in `semantic_similarity`), and `score_details: null`. `hybrid` fuses the top 50 deterministic
+and top 20 semantic results by reciprocal rank: `score = Σ 1 / (60 + rank)`, with `fusion`
+(`rrf_score`, `k`, `deterministic_rank`, `semantic_rank`); a location found by both keeps its
+deterministic fields and gains `semantic_similarity`. Every response has `mode` (requested),
+`mode_used`, and `warnings`. When retrieval is disabled, unconfigured, rate limited, or fails, the
+response is deterministic (`mode_used: "deterministic"`) with a warning, never an error. Files
+changed since indexing are left out of semantic results, with a warning.
+
 `RelevantContext` holds `current_file`, `containing_symbol`, `files[]` (with role: current, imported,
-importer, match), `snippets[]` (with `reason`), `symbols[]`, `relationships[]`, `diagnostics[]`, and
-`metadata` (strategy, limits: 8 snippets / 12,000 characters, `truncated`).
+importer, match, semantic), `snippets[]` (with `reason`), `symbols[]`, `relationships[]`,
+`diagnostics[]`, and `metadata` (strategy, limits: 8 snippets / 12,000 characters, `truncated`,
+`semantic`: `{used, model, detail}`). Semantic snippets come after the deterministic ones, within
+the same limits. AI responses report them in `context.semantic_snippet_count`.
+
+## Semantic retrieval (Module 10)
+
+| Method & path | Description |
+| --- | --- |
+| `GET /rag/status` | `{enabled, configured, available, provider, model, dimensions, detail}`; no provider call, no credential |
+| `GET /projects/{id}/rag/index` | `{available, model, indexable_files, indexed_files, stale_files, chunks}` |
+| `POST /projects/{id}/rag/index` | embeds new and changed files → `{files_indexed, chunks_embedded, chunks_reused, tokens_used, remaining_files, status}` |
+
+All require sign-in; another user's project is `404`. Indexing errors:
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 429 | `too_many_index_runs`, `rag_rate_limited` | per-user run limit; provider rate limit |
+| 502 | `rag_provider_error`, `rag_malformed_response` | provider rejected the request (e.g. credential, model); unusable answer |
+| 503 | `rag_disabled`, `rag_not_configured`, `rag_unavailable` | `RAG_ENABLED` off; no key / unknown provider; provider unreachable |
+| 504 | `rag_timeout` | provider timeout |
 
 ## Errors
 

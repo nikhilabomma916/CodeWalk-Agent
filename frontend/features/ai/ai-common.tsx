@@ -33,7 +33,7 @@ export function AdvisoryFooter({
   provider: string;
   model: string;
   warnings: readonly string[];
-  context?: { used: boolean; files: readonly string[] };
+  context?: { used: boolean; files: readonly string[]; semantic_snippet_count?: number };
 }) {
   return (
     <div className="space-y-1 border-t border-border pt-2 text-[11px] text-fg-subtle">
@@ -47,7 +47,11 @@ export function AdvisoryFooter({
       {context?.used && (
         <p title={context.files.join("\n")}>
           Used project context from {context.files.length} file
-          {context.files.length === 1 ? "" : "s"}.
+          {context.files.length === 1 ? "" : "s"}
+          {context.semantic_snippet_count
+            ? ` (${context.semantic_snippet_count} found by semantic retrieval)`
+            : ""}
+          .
         </p>
       )}
       <p>

@@ -34,6 +34,7 @@ from app.services.project_search.context import ProjectContextBuilder
 from app.services.project_search.index import IndexCache
 from app.services.project_search.service import ProjectSearchService
 from app.services.projects import ProjectService
+from app.services.retrieval.service import RetrievalService, SemanticRetriever
 
 
 def get_app_settings(request: Request) -> Settings:
@@ -146,14 +147,33 @@ def get_index_cache(request: Request) -> IndexCache:
     return cache
 
 
+def get_retrieval_service(request: Request) -> RetrievalService:
+    service: RetrievalService = request.app.state.retrieval_service
+    return service
+
+
 AIServiceDep = Annotated[AIService, Depends(get_ai_service)]
 IndexCacheDep = Annotated[IndexCache, Depends(get_index_cache)]
+RetrievalServiceDep = Annotated[RetrievalService, Depends(get_retrieval_service)]
+
+
+def get_retriever(
+    session: SessionDep, settings: SettingsDep, user: CurrentUserDep, service: RetrievalServiceDep
+) -> SemanticRetriever:
+    return SemanticRetriever(session, settings, user, service)
+
+
+RetrieverDep = Annotated[SemanticRetriever, Depends(get_retriever)]
 
 
 def get_search_service(
-    session: SessionDep, settings: SettingsDep, user: CurrentUserDep, cache: IndexCacheDep
+    session: SessionDep,
+    settings: SettingsDep,
+    user: CurrentUserDep,
+    cache: IndexCacheDep,
+    retriever: RetrieverDep,
 ) -> ProjectSearchService:
-    return ProjectSearchService(session, settings, user, cache)
+    return ProjectSearchService(session, settings, user, cache, retriever=retriever)
 
 
 SearchServiceDep = Annotated[ProjectSearchService, Depends(get_search_service)]
@@ -164,9 +184,14 @@ def get_context_builder(search: SearchServiceDep) -> ProjectContextBuilder:
 
 
 def get_ai_assistant(
-    session: SessionDep, settings: SettingsDep, user: CurrentUserDep, ai: AIServiceDep, cache: IndexCacheDep
+    session: SessionDep,
+    settings: SettingsDep,
+    user: CurrentUserDep,
+    ai: AIServiceDep,
+    cache: IndexCacheDep,
+    retriever: RetrieverDep,
 ) -> AIAssistant:
-    return AIAssistant(session, settings, user, ai, cache)
+    return AIAssistant(session, settings, user, ai, cache, retriever=retriever)
 
 
 ContextBuilderDep = Annotated[ProjectContextBuilder, Depends(get_context_builder)]

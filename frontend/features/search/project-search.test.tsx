@@ -211,3 +211,190 @@ describe("ProjectSearch without a server project", () => {
     ).toBeInTheDocument();
   });
 });
+
+const RETRIEVAL_ON = {
+  enabled: true,
+  configured: true,
+  available: true,
+  provider: "voyage",
+  model: "voyage-code-4",
+  dimensions: 1024,
+  detail: null,
+};
+
+const INDEX = (indexed: number, stale: number) => ({
+  available: true,
+  model: "voyage-code-4",
+  indexable_files: indexed + stale,
+  indexed_files: indexed,
+  stale_files: stale,
+  chunks: indexed * 3,
+});
+
+const SEMANTIC_ONLY = {
+  ...RESULT,
+  file_path: "src/auth/routes.py",
+  symbol_name: "login",
+  symbol_type: "function",
+  qualified_name: "login",
+  line: 4,
+  end_line: 5,
+  column: 1,
+  score: 0.016129,
+  score_details: null,
+  match_type: "semantic",
+  match_reason: "semantically similar to the query (cosine similarity 0.812)",
+  snippet: null,
+  related_symbols: [],
+  semantic_similarity: 0.812,
+  fusion: { rrf_score: 0.016129, k: 60, deterministic_rank: null, semantic_rank: 2 },
+};
+
+function searchResponse(results: unknown[], extra: Record<string, unknown> = {}) {
+  return json({
+    query: "password",
+    terms: ["password"],
+    results,
+    total: results.length,
+    truncated: false,
+    indexed_files: 3,
+    ranking: "hybrid",
+    ...extra,
+  });
+}
+
+describe("ProjectSearch semantic retrieval", () => {
+  it("hides semantic controls and sends deterministic searches when retrieval is unavailable", async () => {
+    const fetchMock = renderSearch([
+      ["POST", /^\/projects\/p1\/search$/, () => searchResponse([RESULT])],
+    ]);
+    await userEvent.type(
+      await screen.findByRole("searchbox", { name: "Search project" }),
+      "password",
+    );
+    await screen.findByRole("list", { name: "Search results" });
+    expect(screen.queryByLabelText("Include semantic matches")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Index project/ })).not.toBeInTheDocument();
+    const sent = requestsOf(fetchMock).filter((r) => r.path === "/projects/p1/search");
+    expect(sent.at(-1)!.body.mode).toBeUndefined();
+    expect(requestsOf(fetchMock).some((r) => r.path.endsWith("/rag/index"))).toBe(false);
+  });
+
+  it("indexes on request and sends hybrid searches when the toggle is on", async () => {
+    let indexed = false;
+    const fetchMock = renderSearch([
+      ["GET", /^\/rag\/status$/, () => json(RETRIEVAL_ON)],
+      ["GET", /^\/projects\/p1\/rag\/index$/, () => json(indexed ? INDEX(3, 0) : INDEX(0, 3))],
+      [
+        "POST",
+        /^\/projects\/p1\/rag\/index$/,
+        () => {
+          indexed = true;
+          return json({
+            files_indexed: 3,
+            chunks_embedded: 9,
+            chunks_reused: 0,
+            tokens_used: 420,
+            remaining_files: 0,
+            status: INDEX(3, 0),
+          });
+        },
+      ],
+      [
+        "POST",
+        /^\/projects\/p1\/search$/,
+        (_url, body) =>
+          (body as { mode?: string }).mode === "hybrid"
+            ? searchResponse(
+                [
+                  {
+                    ...RESULT,
+                    fusion: { ...SEMANTIC_ONLY.fusion, deterministic_rank: 1, semantic_rank: 1 },
+                    semantic_similarity: 0.9,
+                  },
+                  SEMANTIC_ONLY,
+                ],
+                {
+                  mode: "hybrid",
+                  mode_used: "hybrid",
+                  warnings: [],
+                },
+              )
+            : searchResponse([RESULT]),
+      ],
+    ]);
+
+    expect(await screen.findByText("Semantic index: 0/3 files (3 to update)")).toBeInTheDocument();
+    // Nothing is sent to the embedding provider until the developer asks.
+    expect(
+      requestsOf(fetchMock).some((r) => r.method === "POST" && r.path.endsWith("/rag/index")),
+    ).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Index project" }));
+    expect(
+      await screen.findByText("Indexed 3 file(s): 9 chunk(s) embedded, 0 reused."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Semantic index: 3/3 files")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update index" })).toBeDisabled();
+
+    await userEvent.click(screen.getByLabelText("Include semantic matches"));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search project" }), "password");
+    const results = await screen.findByRole("list", { name: "Search results" });
+    expect(within(results).getByText("semantic")).toBeInTheDocument();
+    expect(within(results).getByText("login")).toBeInTheDocument();
+    expect(screen.getByText(/hybrid ranking/)).toBeInTheDocument();
+    const login = within(results).getByRole("button", { name: /login/ });
+    expect(login).toHaveAttribute("title", expect.stringContaining("semantic rank 2"));
+    const sent = requestsOf(fetchMock).filter((r) => r.path === "/projects/p1/search");
+    expect(sent.at(-1)!.body.mode).toBe("hybrid");
+
+    await userEvent.click(login);
+    await waitFor(() =>
+      expect(screen.getByTestId("reveal").textContent).toBe("src/auth/routes.py:4:1"),
+    );
+  });
+
+  it("shows fallback warnings and indexing errors", async () => {
+    renderSearch([
+      ["GET", /^\/rag\/status$/, () => json(RETRIEVAL_ON)],
+      ["GET", /^\/projects\/p1\/rag\/index$/, () => json(INDEX(1, 2))],
+      [
+        "POST",
+        /^\/projects\/p1\/rag\/index$/,
+        () =>
+          json(
+            {
+              error: {
+                code: "rag_unavailable",
+                message: "The embedding provider could not be reached.",
+              },
+            },
+            503,
+          ),
+      ],
+      [
+        "POST",
+        /^\/projects\/p1\/search$/,
+        () =>
+          searchResponse([RESULT], {
+            mode: "hybrid",
+            mode_used: "deterministic",
+            warnings: ["Semantic retrieval failed: provider down. Showing deterministic results."],
+          }),
+      ],
+    ]);
+    await userEvent.click(await screen.findByRole("button", { name: "Update index" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The embedding provider could not be reached.",
+    );
+    expect(screen.getByText("Semantic index: 1/3 files (2 to update)")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Include semantic matches"));
+    await userEvent.type(screen.getByRole("searchbox", { name: "Search project" }), "password");
+    expect(
+      await screen.findByText(
+        "Semantic retrieval failed: provider down. Showing deterministic results.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/hybrid ranking/)).not.toBeInTheDocument();
+  });
+});

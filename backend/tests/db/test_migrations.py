@@ -23,6 +23,7 @@ TABLES = {
     "analyses",
     "diagnostics",
     "activity_events",
+    "code_chunks",
 }
 
 

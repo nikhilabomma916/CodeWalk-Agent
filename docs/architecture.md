@@ -2,8 +2,9 @@
 
 This document describes the architecture of Batch 1 (Modules 1–3: foundation, editor, API), Batch 2
 (Modules 4–6: code analysis, project intelligence, persistence), Batch 3 (authentication,
-application areas, project ownership, history), and Batch 4 (Modules 7–9: AI analysis, AI
-explanations and fix suggestions, project-aware search), and where later modules plug in.
+application areas, project ownership, history), Batch 4 (Modules 7–9: AI analysis, AI
+explanations and fix suggestions, project-aware search), and Module 10 (semantic retrieval), and where
+later modules plug in.
 
 ## Layers
 
@@ -267,8 +268,54 @@ project (LRU of 32, per process) under the fingerprint of all `(path, content_ha
 one metadata query reads, so unchanged projects are never re-parsed and any save invalidates the
 entry. `ranking.py` holds the fixed, documented weights. `ProjectContextBuilder` (`context.py`)
 selects bounded context in a fixed order: definitions of names quoted in diagnostics, query or
-current-symbol matches, definitions of names the file imports, and the files that import it. This
-is the seam where Module 10 (semantic retrieval) can add candidates.
+current-symbol matches, definitions of names the file imports, and the files that import it.
+Module 10 adds a fifth step after these (below).
+
+### Semantic retrieval (Module 10)
+
+Module 10 adds to Module 9; it does not replace it. Deterministic search is the default and is
+unchanged.
+
+```
+ProjectIndex (Module 9, from Module 5 symbols)
+   │ chunk_file: one chunk per function/class/method, 40-line windows for the rest
+   ▼
+EmbeddingProvider ── VoyageEmbeddingProvider (voyage-code-4, input_type document/query)
+   │ vectors (1024 floats)
+   ▼
+code_chunks (PostgreSQL + pgvector, HNSW cosine index)
+   │ SemanticRetriever.search: project_id + current content hash filter, cosine distance
+   ▼
+ProjectSearchService (mode semantic | hybrid → RRF)    ProjectContextBuilder step 5 → AI features
+```
+
+- **`services/retrieval/`**: `base.py` (the `EmbeddingProvider` protocol, `InputType`, and the
+  `RetrievalError` hierarchy), `providers/` (registry, `voyage.py` over `httpx`: batching by count
+  and estimated tokens, status codes mapped to typed errors), `chunking.py`, `fusion.py` (RRF,
+  k = 60), and `service.py`. `RetrievalService` (one per app) selects the provider and holds status,
+  per-user limits, and a small query-embedding cache. `SemanticRetriever` (one per request, for the
+  signed-in user) indexes and searches.
+- **Storage**: `code_chunks` (`project_id`, `file_id` with cascading foreign keys, `content_hash`,
+  `chunk_hash`, line range, symbol, `embedding_model`, `vector(1024)`). Source text is not copied;
+  snippets come from `files.content`. `app/db/vector.py` is a small SQLAlchemy type for pgvector
+  (no extra dependency), registered for reflection so `alembic check` sees the column.
+- **Ownership and freshness**: every operation receives the project and index from
+  `ProjectSearchService.project_index` (owner-checked). Queries filter on `project_id` and join
+  `files` on `content_hash`, so chunks of edited files are never returned. pgvector's iterative
+  HNSW scan (`hnsw.iterative_scan = relaxed_order`) keeps filtered queries complete; results are
+  re-sorted exactly.
+- **Incremental indexing**: a file is re-chunked only when its content hash changed. Chunks whose
+  text hash is unchanged keep their stored vectors, and only the rest are embedded. Each group of
+  up to 256 texts is committed on its own, and runs are bounded by `CODEWALK_RAG_MAX_CHUNKS_PER_RUN`.
+  Indexing is triggered explicitly (API / *Index project*), never by a search or a save, because
+  it sends code to the provider.
+- **Hybrid ranking**: the top 50 deterministic and top 20 semantic results are fused by rank only;
+  raw scores are never mixed. A location found by both lists is one result carrying both ranks.
+- **Context**: `ProjectContextBuilder` runs the four deterministic steps first. Step 5 embeds the
+  diagnostics, query, and the code around the line, and adds up to 4 similar chunks from other
+  files within the remaining snippet/character budget. `metadata.semantic` records whether it was
+  used and why not. `AIAssistant` passes the per-request retriever through, so the AI endpoints get
+  semantic context with no prompt or endpoint changes.
 
 ### Security foundations
 
@@ -287,12 +334,18 @@ is the seam where Module 10 (semantic retrieval) can add candidates.
 - Search, snippets, and context read only the caller's own project records, never the filesystem.
   Paths are validated (no `..`, absolute, or drive paths), ignored and secret files are excluded,
   and result and snippet sizes are bounded.
+- Semantic retrieval queries are always scoped to the caller's project. `VOYAGE_API_KEY` is a
+  server-side `SecretStr`; `/rag/status` never calls the provider or returns the key. Indexing sends
+  source code to the embedding provider and only runs when a user asks for it.
 
-### Known limitations (Batch 4)
+### Known limitations (Batch 4 and Module 10)
 
 - Only the Anthropic provider is implemented. AI quality depends on the model, and answers are
   advisory.
-- Search is lexical and structural, not semantic (Module 10). Symbol extraction covers Python and
-  JS/TS, and other languages are searched by file name and text.
+- Only the Voyage embedding provider is implemented, and the vector width is fixed at 1024 (a
+  different width needs a migration and a re-index). Semantic quality depends on the model.
+- Indexing is manual and synchronous (bounded per run); files edited after indexing drop out of
+  semantic results until the next run.
+- Symbol extraction covers Python and JS/TS, and other languages are searched and chunked by lines.
 - Fix suggestions change one file and need files under 100,000 characters.
 - Rate limits and the search index cache are per process.

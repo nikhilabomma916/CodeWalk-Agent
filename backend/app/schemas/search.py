@@ -1,4 +1,8 @@
-"""Project search and context (Module 9). Deterministic: no embeddings, no semantic ranking."""
+"""Project search and context.
+
+Module 9 search is deterministic. Module 10 adds optional semantic retrieval (embeddings) and a
+hybrid mode that fuses both result lists by rank; deterministic stays the default.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +28,13 @@ class MatchType(StrEnum):
     IMPORT = "import"
     IDENTIFIER = "identifier"
     TEXT = "text"
+    SEMANTIC = "semantic"  # Module 10: found by embedding similarity
+
+
+class SearchMode(StrEnum):
+    DETERMINISTIC = "deterministic"
+    SEMANTIC = "semantic"
+    HYBRID = "hybrid"
 
 
 class SearchFilters(BaseModel):
@@ -44,6 +55,11 @@ class SearchRequest(BaseModel):
     current_file: ProjectFilePath | None = Field(
         default=None, description="The open file: results in it and in files related by imports rank higher."
     )
+    mode: SearchMode = Field(
+        default=SearchMode.DETERMINISTIC,
+        description="deterministic (Module 9), semantic (embeddings), or hybrid (both, fused by rank). "
+        "Falls back to deterministic, with a warning, when semantic retrieval is unavailable.",
+    )
 
 
 class Snippet(BaseModel):
@@ -60,6 +76,13 @@ class ScoreDetails(BaseModel):
     context_bonus: int = Field(description="Bonus for the current file or files related to it by imports.")
 
 
+class FusionDetails(BaseModel):
+    rrf_score: float = Field(description="Sum of 1 / (k + rank) over the lists that contain the result.")
+    k: int
+    deterministic_rank: int | None
+    semantic_rank: int | None
+
+
 class SearchResult(BaseModel):
     file_path: str
     symbol_name: str | None
@@ -69,12 +92,21 @@ class SearchResult(BaseModel):
     line: int | None
     end_line: int | None
     column: int | None
-    score: float = Field(description="base x coverage + context_bonus (see score_details).")
-    score_details: ScoreDetails
+    score: float = Field(
+        description="deterministic: base x coverage + context_bonus (see score_details); "
+        "semantic: cosine similarity; hybrid: the RRF score (see fusion)."
+    )
+    score_details: ScoreDetails | None = Field(
+        description="Deterministic scoring, when this was a deterministic match."
+    )
     match_type: MatchType
     match_reason: str
     snippet: Snippet | None
     related_symbols: list[str]
+    semantic_similarity: float | None = Field(
+        default=None, description="Cosine similarity to the query, when found by semantic retrieval."
+    )
+    fusion: FusionDetails | None = Field(default=None, description="Rank fusion details (hybrid mode).")
 
 
 class SearchResponse(BaseModel):
@@ -85,6 +117,9 @@ class SearchResponse(BaseModel):
     truncated: bool
     indexed_files: int
     ranking: str = Field(description="How results are ordered.")
+    mode: SearchMode = Field(description="The requested mode.")
+    mode_used: SearchMode = Field(description="The mode that produced the results.")
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SnippetRequest(BaseModel):
@@ -108,7 +143,7 @@ class ContextRequest(BaseModel):
 
 class ContextFile(BaseModel):
     file_path: str
-    role: str = Field(description="current | imported | importer | match")
+    role: str = Field(description="current | imported | importer | match | semantic")
 
 
 class ContextSymbol(BaseModel):
@@ -133,7 +168,7 @@ class ContextSnippet(Snippet):
 
 
 class RelevantContext(BaseModel):
-    """Bounded, deterministic context for one file: the bridge to future retrieval (Module 10)."""
+    """Bounded context for one file: deterministic selection, then semantic matches when available."""
 
     current_file: str
     containing_symbol: ContextSymbol | None

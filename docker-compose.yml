@@ -9,7 +9,10 @@ name: codewalk
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # PostgreSQL 17 with the pgvector extension (semantic retrieval, Module 10). Debian-based:
+    # a data volume first created by postgres:17-alpine needs a one-time REINDEX after switching
+    # (musl and glibc order text differently) - see README "Upgrading the database image".
+    image: pgvector/pgvector:pg17-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-codewalk}

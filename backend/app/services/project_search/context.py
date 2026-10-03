@@ -1,4 +1,4 @@
-"""ProjectContextBuilder: bounded, deterministic context around one file (Module 9).
+"""ProjectContextBuilder: bounded context around one file (Module 9, extended by Module 10).
 
 Given the open file (optionally its unsaved buffer), a line, diagnostics, and a
 query, it selects related project code in a fixed priority order:
@@ -7,19 +7,26 @@ query, it selects related project code in a fixed priority order:
    (e.g. ``'total' is not defined``),
 2. symbols matching the query / current symbol (project search),
 3. definitions of the names the current file imports from project files,
-4. the import lines of files that import the current file.
+4. the import lines of files that import the current file,
+5. (Module 10, when semantic retrieval is available) code in other files whose
+   embeddings are most similar to the diagnostics, query, and the code around
+   the line.
 
-Selection stops at MAX_SNIPPETS or MAX_CONTEXT_CHARS; ``metadata.truncated`` says
-so. This is the seam where Module 10 retrieval can add candidates later.
+The deterministic steps always run first; semantic matches only fill the space
+they leave. Selection stops at MAX_SNIPPETS or MAX_CONTEXT_CHARS;
+``metadata.truncated`` says so. A semantic failure never fails the build: the
+context stays deterministic and ``metadata.semantic`` says why.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import NotFoundError
+from app.db.models import Project
 from app.schemas.ai import DiagnosticInput
 from app.schemas.search import (
     ContextFile,
@@ -35,10 +42,14 @@ from app.services.project_intelligence.models import CodeSymbol, SourceFile
 from app.services.project_intelligence.project_analyzer import STRUCTURE_LANGUAGES, extract_structure
 from app.services.project_search.index import IndexedFile, ProjectIndex
 from app.services.project_search.service import ProjectSearchService, make_snippet
+from app.services.retrieval.base import RetrievalError
 
 MAX_SNIPPETS = 8
 MAX_CONTEXT_CHARS = 12_000
 MAX_DEFINITION_LINES = 30
+SEMANTIC_CANDIDATES = 4
+MAX_SEMANTIC_QUERY_CHARS = 2000
+logger = logging.getLogger(__name__)
 _QUOTED_NAME = re.compile(r"['\"`]([A-Za-z_][A-Za-z0-9_]*)['\"`]")
 
 
@@ -84,7 +95,7 @@ class ProjectContextBuilder:
         current_symbol: str | None = None,
         diagnostics: Sequence[DiagnosticInput] = (),
     ) -> RelevantContext:
-        _, index = self.search.project_index(project_id)
+        project, index = self.search.project_index(project_id)
         stored = index.files.get(current_file)
         if stored is None:
             raise NotFoundError("The file is not part of this project.", code="file_not_found")
@@ -99,6 +110,7 @@ class ProjectContextBuilder:
             if structure.parse_error is None:
                 symbols = structure.symbols
         container = containing_symbol(symbols, line) if line is not None else None
+        source_lines = current_content.splitlines() if current_content is not None else (stored.lines or [])
 
         selection = _Selection()
         files = [ContextFile(file_path=current_file, role="current")]
@@ -143,6 +155,15 @@ class ProjectContextBuilder:
                     selection.add_lines(importer, record.line, record.line, "imports the current file")
                     break
 
+        # 5. Semantic matches (Module 10), within the space the deterministic steps left.
+        semantic = self._semantic(
+            project,
+            index,
+            selection,
+            current_file=current_file,
+            text=self._semantic_query(diagnostics, query, current_symbol, container, source_lines, line),
+        )
+
         relationships = [
             ContextRelationship(source=current_file, target=target, kind="imports", line=None)
             for target in sorted(index.imports_of.get(current_file, set()))
@@ -152,7 +173,8 @@ class ProjectContextBuilder:
         ]
         for snippet in selection.snippets:
             if all(f.file_path != snippet.file_path for f in files):
-                files.append(ContextFile(file_path=snippet.file_path, role="match"))
+                role = "semantic" if snippet.reason.startswith("semantically") else "match"
+                files.append(ContextFile(file_path=snippet.file_path, role=role))
 
         return RelevantContext(
             current_file=current_file,
@@ -163,7 +185,12 @@ class ProjectContextBuilder:
             relationships=relationships,
             diagnostics=list(diagnostics),
             metadata={
-                "strategy": "deterministic (symbols, imports, text); no embeddings",
+                "strategy": (
+                    f"deterministic (symbols, imports, text) + semantic ({semantic['model']} embeddings)"
+                    if semantic["used"]
+                    else "deterministic (symbols, imports, text)"
+                ),
+                "semantic": semantic,
                 "max_snippets": MAX_SNIPPETS,
                 "max_chars": MAX_CONTEXT_CHARS,
                 "chars": selection.chars,
@@ -171,6 +198,59 @@ class ProjectContextBuilder:
                 "used_unsaved_buffer": current_content is not None,
             },
         )
+
+    @staticmethod
+    def _semantic_query(
+        diagnostics: Sequence[DiagnosticInput],
+        query: str | None,
+        current_symbol: str | None,
+        container: CodeSymbol | None,
+        lines: Sequence[str],
+        line: int | None,
+    ) -> str:
+        """What the developer is looking at: diagnostics, query, and the code around the line."""
+        parts = [d.message for d in diagnostics[:5]]
+        parts += [t.strip() for t in (query, current_symbol) if t and t.strip()]
+        if container is not None:
+            parts.append("\n".join(lines[container.line - 1 : container.end_line]))
+        elif line is not None:
+            parts.append("\n".join(lines[max(0, line - 6) : line + 5]))
+        return "\n".join(p for p in parts if p.strip())[:MAX_SEMANTIC_QUERY_CHARS]
+
+    def _semantic(
+        self,
+        project: Project,
+        index: ProjectIndex,
+        selection: _Selection,
+        *,
+        current_file: str,
+        text: str,
+    ) -> dict[str, object]:
+        retriever = self.search.retriever
+        if retriever is None or not retriever.available:
+            return {"used": False, "model": None, "detail": "semantic retrieval is not available"}
+        if not text.strip():
+            return {"used": False, "model": retriever.model, "detail": "nothing to search for"}
+        if selection.full:
+            return {"used": False, "model": retriever.model, "detail": "context limit reached"}
+        try:
+            hits = retriever.search(
+                project, index, text, limit=SEMANTIC_CANDIDATES, exclude_path=current_file
+            )
+        except RetrievalError as exc:
+            logger.warning("Semantic context unavailable: %s", exc.code)
+            return {"used": False, "model": retriever.model, "detail": exc.message}
+        added = 0
+        for hit in hits:
+            file = index.files.get(hit.file_path)
+            if file is not None and selection.add_lines(
+                file,
+                hit.start_line,
+                hit.end_line,
+                f"semantically similar (cosine similarity {hit.similarity:.2f})",
+            ):
+                added += 1
+        return {"used": added > 0, "model": retriever.model, "detail": None, "snippets": added}
 
     @staticmethod
     def _definitions(index: ProjectIndex, name: str, *, exclude: str) -> list[tuple[IndexedFile, CodeSymbol]]:
@@ -196,19 +276,24 @@ class _Selection:
             self.symbols.append(_symbol(symbol))
         self.add_lines(file, symbol.line, symbol.end_line, reason)
 
-    def add_lines(self, file: IndexedFile, start: int, end: int, reason: str) -> None:
+    @property
+    def full(self) -> bool:
+        return len(self.snippets) >= MAX_SNIPPETS or self.chars >= MAX_CONTEXT_CHARS
+
+    def add_lines(self, file: IndexedFile, start: int, end: int, reason: str) -> bool:
         if (file.path, start) in self._seen:
-            return
+            return False
         if len(self.snippets) >= MAX_SNIPPETS:
             self.truncated = True
-            return
+            return False
         snippet = make_snippet(file, start, end, max_lines=MAX_DEFINITION_LINES)
         if snippet is None:
-            return
+            return False
         size = sum(len(line) + 1 for line in snippet.lines)
         if self.chars + size > MAX_CONTEXT_CHARS:
             self.truncated = True
-            return
+            return False
         self._seen.add((file.path, start))
         self.chars += size
         self.snippets.append(ContextSnippet(**snippet.model_dump(), reason=reason))
+        return True

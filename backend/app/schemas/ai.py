@@ -160,6 +160,9 @@ class ContextSummary(BaseModel):
     files: list[str] = Field(default_factory=list)
     symbols: list[str] = Field(default_factory=list)
     snippet_count: int = 0
+    semantic_snippet_count: int = Field(
+        default=0, description="Snippets found by semantic retrieval (Module 10)."
+    )
     truncated: bool = False
 
 

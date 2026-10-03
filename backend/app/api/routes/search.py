@@ -1,4 +1,7 @@
-"""Project-aware search and context (Module 9): deterministic, owner-only, bounded."""
+"""Project-aware search and context (Modules 9 and 10): owner-only, bounded.
+
+Deterministic search is the default; ``mode`` adds semantic or hybrid retrieval when available.
+"""
 
 from __future__ import annotations
 
@@ -35,7 +38,10 @@ router = APIRouter(
     description=(
         "Matches symbols (functions, classes, methods, ...), file names and paths, imports, identifiers, "
         "and source text of the project's stored files. Ranking is deterministic and explained per result "
-        "(`score_details`, `match_reason`). Not semantic search."
+        "(`score_details`, `match_reason`). With `mode: semantic` results come from code embeddings "
+        "(cosine similarity); with `mode: hybrid` both lists are fused by reciprocal rank (`fusion`). "
+        "Without semantic retrieval the response falls back to deterministic results (`mode_used`, "
+        "`warnings`)."
     ),
 )
 def search_project(
@@ -55,7 +61,8 @@ def project_snippet(project_id: uuid.UUID, request: SnippetRequest, service: Sea
     summary="Related code for a file",
     description=(
         "The context the AI features use: the containing symbol, definitions of names in diagnostics, "
-        "query matches, imported definitions, and importers, within fixed size limits."
+        "query matches, imported definitions, importers, and (when available) semantically similar code, "
+        "within fixed size limits."
     ),
 )
 def project_context(

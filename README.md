@@ -4,10 +4,11 @@ CodeWalk Agent is an AI-assisted coding environment: a browser-based IDE that he
 write, understand, debug, and improve code, and eventually understand whole projects through
 deterministic analysis, project intelligence, retrieval-augmented generation (RAG), and AI agents.
 
-> **Status:** Batches 1–4 are complete: foundation, editor, and API (Modules 1–3); code analysis,
-> project intelligence, and PostgreSQL persistence (Modules 4–6); accounts, application areas, and
-> project ownership (Batch 3); AI code analysis, AI explanations and fix suggestions, and
-> project-aware search (Modules 7–9). Features listed under *Planned* are **not implemented yet**.
+> **Status:** Batches 1–4 and Module 10 are complete: foundation, editor, and API (Modules 1–3);
+> code analysis, project intelligence, and PostgreSQL persistence (Modules 4–6); accounts,
+> application areas, and project ownership (Batch 3); AI code analysis, AI explanations and fix
+> suggestions, and project-aware search (Modules 7–9); semantic retrieval with hybrid ranking
+> (Module 10). Features listed under *Planned* are **not implemented yet**.
 
 ## Capabilities
 
@@ -42,7 +43,13 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
   functions, classes, methods, files, imports, identifiers, and text in a server project, with
   language and symbol-type filters. Ranking is deterministic and explained (not semantic), and the
   open file and files related to it by imports rank higher. Clicking a result opens the file at that
-  line. The same deterministic context builder supplies related code to the AI features.
+  line. The same context builder supplies related code to the AI features.
+- **Semantic retrieval (Module 10, optional)**: code embeddings (Voyage AI `voyage-code-4`) stored in
+  PostgreSQL with pgvector. Deterministic search stays the default and is unchanged. When retrieval is
+  available, the Search sidebar offers *Include semantic matches* (hybrid ranking: the deterministic
+  and semantic lists are merged by reciprocal rank fusion) and an explicit *Index project* action.
+  The AI features receive semantically similar code from other files after the deterministic
+  context. See [Semantic retrieval](#semantic-retrieval-enabling-it).
 - **File versions**: each saved content change of a server file is kept as a numbered version (newest
   50 per file by default) and can be viewed or restored through the API.
 - **Coding workspace** (Next.js + Monaco): project explorer, multi-file tabs, syntax highlighting for
@@ -75,8 +82,8 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
 
 ### Planned (future batches)
 
-RAG / semantic retrieval (Module 10) → multi-agent assistance → Docker deployment. Account
-management (password change/reset, email verification, settings) is not implemented yet.
+Multi-agent assistance → Docker deployment. Account management (password change/reset, email
+verification, settings) is not implemented yet.
 
 ### AI assistance: enabling it
 
@@ -87,6 +94,35 @@ then restart the backend. The only provider implemented is Anthropic (Claude; de
 `AIProvider` interface. The key stays on the server: it is never sent to the browser, returned by the
 API, or logged. Without it, `GET /api/v1/ai/status` explains what is missing, and the UI shows
 "AI unavailable" instead of results.
+
+### Semantic retrieval: enabling it
+
+Semantic retrieval is **off by default**; deterministic search and the AI features work without it.
+To enable it, set `RAG_ENABLED=true` and `VOYAGE_API_KEY` in your local `.env` (server-side only),
+then restart the backend. `GET /api/v1/rag/status` reports what is missing, without calling the
+provider and without returning the key.
+
+- **Provider**: Voyage AI through its REST API (`EmbeddingProvider` → `VoyageEmbeddingProvider`;
+  other providers register behind the same interface). Default model `voyage-code-4`
+  (`RAG_EMBEDDING_MODEL`), 1024 float dimensions. Code chunks are embedded as `document`, searches
+  as `query`.
+- **Indexing is explicit**: *Index project* (or `POST /api/v1/projects/{id}/rag/index`) sends new and
+  changed files to the provider. **This sends the project's source code to Voyage AI.** Files are split
+  along the Module 5 symbols (functions, classes, methods; other lines in 40-line windows), bounded in
+  size. Ignored folders and secret files are never indexed. Unchanged chunks keep their vectors, so
+  re-indexing after an edit only embeds what changed. One run embeds at most
+  `CODEWALK_RAG_MAX_CHUNKS_PER_RUN` chunks; `remaining_files` says whether to run again.
+- **Freshness**: a file edited after indexing is excluded from semantic results (its stored chunks
+  no longer match its content hash) until it is indexed again, and the search response warns about it.
+- **Search modes** (`mode` on `POST /api/v1/projects/{id}/search`): `deterministic` (default,
+  Module 9), `semantic` (cosine similarity), `hybrid` (RRF, `score = Σ 1/(60 + rank)`; results carry
+  their ranks in `fusion`). Without retrieval, the request still succeeds with deterministic results,
+  `mode_used: "deterministic"`, and a warning.
+- **AI context**: after the four deterministic context steps, up to 4 semantically similar snippets
+  from other files fill the remaining budget (reason `semantically similar (cosine similarity …)`).
+  A retrieval failure never fails an AI request; the context stays deterministic.
+
+This is retrieval for search and AI context only: there is no autonomous agent, and nothing is executed.
 
 ## Architecture
 
@@ -155,7 +191,7 @@ See [docs/architecture.md](docs/architecture.md) for the design and extension po
 ```bash
 npm run setup                        # npm install (frontend + TypeScript analyzer worker), uv sync (backend)
 cp .env.example .env                 # includes working local database URLs
-npm run db:up                        # PostgreSQL 17 in Docker (creates codewalk + codewalk_test)
+npm run db:up                        # PostgreSQL 17 + pgvector in Docker (creates codewalk + codewalk_test)
 npm run db:migrate                   # alembic upgrade head
 ```
 
@@ -166,6 +202,22 @@ built-in or seeded users. The tests create their own throw-away users.
 projects created before accounts existed, `alembic upgrade head` stops and explains this. Run
 `uv --directory backend run alembic -x delete_unowned_projects=true upgrade head` to delete them
 (with their files and analyses) and continue.
+
+**Upgrading the database image (Module 10):** `docker-compose.yml` now uses
+`pgvector/pgvector:pg17-bookworm` instead of `postgres:17-alpine`. The data volume is reused as is
+(same PostgreSQL 17 data directory). Because Alpine (musl) and Debian (glibc) sort text differently,
+rebuild the text indexes once after switching, then migrate:
+
+```bash
+docker compose exec postgres pg_dumpall -U codewalk > backup.sql   # before switching (optional, recommended)
+docker compose up -d --wait postgres                                # recreates the container on the new image
+docker compose exec postgres psql -U codewalk -d codewalk -c "REINDEX DATABASE codewalk;"
+docker compose exec postgres psql -U codewalk -d codewalk_test -c "REINDEX DATABASE codewalk_test;"
+npm run db:migrate                                                  # adds the vector extension and code_chunks
+```
+
+The migration runs `CREATE EXTENSION IF NOT EXISTS vector`, which needs pgvector installed on the
+server (it is in the image above).
 
 Without Docker, leave `CODEWALK_DATABASE_URL` empty. The editor and code analysis still work, and
 server projects report that persistence is unavailable. Use `127.0.0.1` rather than `localhost` in
@@ -200,6 +252,11 @@ The repository-level `.env` is read by both the backend and the frontend (`backe
 | `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | `anthropic`; model (default `claude-opus-5-5`) |
 | `CODEWALK_AI_TIMEOUT_SECONDS`, `CODEWALK_AI_MAX_TOKENS`, `CODEWALK_AI_EFFORT` | request limits and reasoning effort |
 | `CODEWALK_AI_MAX_REQUESTS`, `CODEWALK_AI_WINDOW_SECONDS` | AI requests per user per window (then 429) |
+| `RAG_ENABLED` | turn semantic retrieval on (default `false`) |
+| `VOYAGE_API_KEY` | embedding provider credential, **server-side only** |
+| `RAG_EMBEDDING_PROVIDER`, `RAG_EMBEDDING_MODEL` | `voyage`; model (default `voyage-code-4`) |
+| `CODEWALK_RAG_TIMEOUT_SECONDS`, `CODEWALK_RAG_MAX_CHUNKS_PER_RUN` | provider timeout; chunks embedded per indexing run |
+| `CODEWALK_RAG_MAX_QUERIES`, `CODEWALK_RAG_MAX_INDEX_RUNS`, `CODEWALK_RAG_WINDOW_SECONDS` | query embeddings and indexing runs per user per window |
 | `NEXT_PUBLIC_API_BASE_URL` | backend API base URL used by the browser |
 
 Production startup fails fast on an insecure configuration (missing or weak secret key, wildcard CORS).
@@ -242,6 +299,12 @@ Per service: `cd backend && uv run pytest | ruff check app tests | mypy`, and
 with a mock HTTP transport, and the AI endpoints use a test-only stub provider (`tests/ai_stub.py`)
 to check CodeWalk's own logic. `tests/test_live_ai_provider.py` sends one real request only when a
 credential is present in the environment, and is skipped otherwise.
+
+**Retrieval tests** follow the same rule. The Voyage provider is tested with a mock HTTP transport
+(request shape, batching, input types, error mapping). The indexing, search, fusion, context, and
+ownership tests run on real PostgreSQL + pgvector with `tests/embedding_stub.py`, a test-only
+hashed bag-of-words embedder that is **not** a real model and says nothing about retrieval quality.
+`tests/test_live_voyage.py` makes real embedding calls only when `VOYAGE_API_KEY` is set.
 
 **PostgreSQL tests** (`backend/tests/db`) run against a real database and are skipped, never faked,
 when `CODEWALK_TEST_DATABASE_URL` is unset. They rebuild the schema with the Alembic migrations, so
