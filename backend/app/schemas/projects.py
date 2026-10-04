@@ -78,6 +78,13 @@ class FileCreate(BaseModel):
     content: str = ""
 
 
+class CodeFileCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Checked by the service (file name only, allowed extension) so the error explains the rule.
+    name: str = Field(max_length=1024, description="A file name such as main.py; no folders.")
+
+
 MAX_IMPORT_FILES_PER_REQUEST = 100
 
 

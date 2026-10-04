@@ -1,32 +1,79 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens. Components use these semantic names only (bg-surface, text-fg, bg-accent, ...);
+ * no component hard-codes a colour. Dark is the default value set; [data-theme="light"] on <html>
+ * overrides it (set before first paint by the inline script in app/layout.tsx).
+ */
 @theme {
-  --color-app: #111317;
-  --color-surface: #16181d;
-  --color-surface-sunken: #121419;
-  --color-surface-raised: #1c1f26;
-  --color-surface-hover: #262a33;
-  --color-surface-active: #2c3240;
-  --color-border: #2a2e37;
-  --color-border-strong: #3a3f4b;
+  /* Dark: deep navy surfaces, dusty-rose accent. */
+  --color-app: #131b36;
+  --color-surface: #131b36;
+  --color-surface-sunken: #0f1631;
+  --color-surface-raised: #143559;
+  --color-surface-hover: #1b3d66;
+  --color-surface-active: #203e67;
+  --color-border: #2e4468;
+  --color-border-strong: #43597c;
 
-  --color-fg: #d7dae0;
-  --color-fg-muted: #8b919d;
-  --color-fg-subtle: #5f6571;
+  --color-fg: #f5f7fa;
+  --color-fg-muted: #b8c1d1;
+  /* Lighter than the palette's #5B6F90, which is too low-contrast for text. */
+  --color-fg-subtle: #a0acc4;
 
-  --color-accent: #3b82f6;
-  --color-accent-strong: #2563eb;
-  --color-accent-muted: #1e3a5f;
+  /* Brand accent: fills, focus rings, active markers. */
+  --color-accent: #db8384;
+  --color-accent-strong: #b1555a;
+  --color-accent-muted: #742d36;
+  /* Accent used as text or links (meets 4.5:1 on the surfaces). */
+  --color-accent-text: #e9a3a4;
+  /* Text on accent fills, at rest and on hover. */
+  --color-on-accent: #131b36;
+  --color-on-accent-hover: #ffffff;
 
-  --color-danger: #f14c4c;
-  --color-warning: #d7ba7d;
-  --color-info: #4fa3ff;
-  --color-success: #3fb950;
+  --color-danger: #ff8e8e;
+  --color-danger-strong: #742d36;
+  --color-on-danger: #f5f7fa;
+  --color-warning: #e5c07b;
+  --color-info: #8ab4ff;
+  --color-success: #6fd39a;
 
   --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
     ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono",
     monospace;
+}
+
+/* Light: off-white page, white surfaces, orange accent. */
+:root[data-theme="light"] {
+  --color-app: #fafaf8;
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f5f5f2;
+  --color-surface-raised: #ffffff;
+  --color-surface-hover: #f2f1ee;
+  --color-surface-active: #fff1ec;
+  --color-border: #eaeaea;
+  --color-border-strong: #c9c9c5;
+
+  --color-fg: #0b0b0b;
+  --color-fg-muted: #4a4a4a;
+  /* The palette's #777777 is 4.48:1 on white; #707070 keeps small text above 4.5:1. */
+  --color-fg-subtle: #707070;
+
+  --color-accent: #ff4b23;
+  --color-accent-strong: #e63e1c;
+  --color-accent-muted: #fff1ec;
+  --color-accent-text: #c4360f;
+  /* White on #FF4B23 is only 3.3:1, so text on orange fills is near-black (5.9:1). */
+  --color-on-accent: #0b0b0b;
+  --color-on-accent-hover: #0b0b0b;
+
+  --color-danger: #c4231c;
+  --color-danger-strong: #c4231c;
+  --color-on-danger: #ffffff;
+  --color-warning: #8a5a00;
+  --color-info: #1f5fbf;
+  --color-success: #1e7b3a;
 }
 
 @layer base {
@@ -39,7 +86,32 @@
     background: var(--color-app);
     color: var(--color-fg);
     font-family: var(--font-sans);
+  }
+
+  :root {
     color-scheme: dark;
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+  }
+
+  /* A short colour transition while the theme is switched (only then, and never with reduced motion). */
+  :root.theme-transition *,
+  :root.theme-transition *::before,
+  :root.theme-transition *::after {
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    :root.theme-transition *,
+    :root.theme-transition *::before,
+    :root.theme-transition *::after {
+      transition: none !important;
+    }
   }
 
   :focus-visible {

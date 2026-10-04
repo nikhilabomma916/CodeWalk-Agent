@@ -27,7 +27,7 @@ export function PageFrame({ title, meta, actions, children }: PageFrameProps) {
 
 export const buttonClass = {
   primary:
-    "inline-flex items-center gap-1.5 rounded bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-60",
+    "inline-flex items-center gap-1.5 rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-60",
   secondary:
     "inline-flex items-center gap-1.5 rounded border border-border bg-surface-raised px-2.5 py-1 text-xs text-fg hover:border-border-strong hover:bg-surface-hover disabled:opacity-50",
   danger:

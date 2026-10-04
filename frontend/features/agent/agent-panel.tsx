@@ -81,7 +81,7 @@ function EventIcon({ event }: { event: AgentEvent }) {
     case "limit_reached":
       return <AlertTriangle aria-hidden className={`${cls} text-warning`} />;
     case "action_proposed":
-      return <FileDiff aria-hidden className={`${cls} text-accent`} />;
+      return <FileDiff aria-hidden className={`${cls} text-accent-text`} />;
     case "tool_started":
       return <Search aria-hidden className={`${cls} text-fg-subtle`} />;
     default:
@@ -132,7 +132,7 @@ function ProposedChangeCard({ action }: { action: AgentAction }) {
       className="rounded border border-border bg-surface px-2 py-1.5"
     >
       <div className="flex items-start gap-2">
-        <Wrench aria-hidden className="mt-0.5 size-3.5 shrink-0 text-accent" />
+        <Wrench aria-hidden className="mt-0.5 size-3.5 shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
           <p className="text-xs text-fg">{action.summary}</p>
           <p className="truncate font-mono text-[10px] text-fg-subtle" title={action.file_path}>
@@ -162,7 +162,7 @@ function ProposedChangeCard({ action }: { action: AgentAction }) {
             type="button"
             disabled={busy || dirty || state.project?.readOnly}
             onClick={() => void approve(action)}
-            className="rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-white hover:bg-accent-strong disabled:opacity-50"
+            className="rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
           >
             {busy ? "Working…" : creates ? "Create file" : "Apply"}
           </button>
@@ -233,7 +233,7 @@ function GroupCard({ actions }: { actions: AgentAction[] }) {
       className="rounded border border-border bg-surface px-2 py-1.5"
     >
       <div className="flex items-start gap-2">
-        <Wrench aria-hidden className="mt-0.5 size-3.5 shrink-0 text-accent" />
+        <Wrench aria-hidden className="mt-0.5 size-3.5 shrink-0 text-accent-text" />
         <div className="min-w-0 flex-1">
           <p className="text-xs text-fg">{first.summary}</p>
           <p className="text-[10px] text-fg-subtle">
@@ -262,7 +262,7 @@ function GroupCard({ actions }: { actions: AgentAction[] }) {
             type="button"
             disabled={busy || dirty.length > 0 || state.project?.readOnly}
             onClick={() => void decideGroup(groupId, "approve")}
-            className="rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-white hover:bg-accent-strong disabled:opacity-50"
+            className="rounded bg-accent px-2 py-0.5 text-[11px] font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
           >
             {busy ? "Working…" : `Apply all ${actions.length} files`}
           </button>
@@ -349,7 +349,7 @@ function Findings({ findings }: { findings: ReviewFinding[] }) {
             <button
               type="button"
               onClick={() => void actions.revealPosition(f.file_path, f.start_line, 1)}
-              className="mt-0.5 font-mono text-[10px] text-accent hover:underline"
+              className="mt-0.5 font-mono text-[10px] text-accent-text hover:underline"
             >
               {f.file_path}:{f.start_line}
               {f.end_line > f.start_line ? `-${f.end_line}` : ""}
@@ -563,7 +563,7 @@ export function AgentPanel() {
           <button
             type="submit"
             disabled={!message.trim() || running || Boolean(unavailable) || !serverProject}
-            className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-50"
+            className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
           >
             Ask agent
           </button>

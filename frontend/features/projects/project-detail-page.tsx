@@ -1,6 +1,14 @@
 "use client";
 
-import { Code2, History, Pencil, ScanSearch, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  History,
+  Pencil,
+  ScanSearch,
+  Trash2,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -8,6 +16,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNod
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { buttonClass, PageFrame } from "@/components/ui/page-frame";
 import { StateMessage } from "@/components/ui/state-message";
+import { ProjectAsk, type AskModeOption } from "@/features/agent/project-ask";
 import { codingHref } from "@/features/workspace/use-coding-deep-link";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import {
@@ -34,6 +43,12 @@ import {
 
 import { ProjectFileTree } from "./project-file-tree";
 import { ProjectStatusBadges } from "./projects-page";
+
+const PROJECT_ASK_MODES: readonly AskModeOption[] = [
+  { id: "assist", label: "Ask a question" },
+  { id: "architecture", label: "Explain the architecture" },
+  { id: "impact", label: "What could break?" },
+];
 
 type DetailState =
   | { status: "loading" }
@@ -175,6 +190,8 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
   const [analyzing, setAnalyzing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
+  // Details are shown on request: the page answers questions instead of listing everything up front.
+  const [showDetails, setShowDetails] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -314,9 +331,14 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
             <ScanSearch aria-hidden className={`size-3.5 ${analyzing ? "animate-pulse" : ""}`} />
             <span className="hidden sm:inline">{analyzing ? "Analyzing…" : "Analyze"}</span>
           </button>
-          <Link href={codingHref(project.id)} className={buttonClass.primary}>
+          <Link
+            href={
+              project.origin === "upload" ? `/app/uploads/${project.id}` : codingHref(project.id)
+            }
+            className={buttonClass.primary}
+          >
             <Code2 aria-hidden className="size-3.5" />
-            Open in Coding
+            {project.origin === "upload" ? "Open analysis" : "Open in Coding"}
           </Link>
         </>
       }
@@ -356,123 +378,161 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
           )}
         </section>
 
-        <dl className="grid grid-cols-2 gap-4 rounded border border-border bg-surface-sunken p-3 sm:grid-cols-3 lg:grid-cols-6">
-          <Stat label="Files">{stats.file_count.toLocaleString()}</Stat>
-          <Stat label="Lines">{stats.total_lines.toLocaleString()}</Stat>
-          <Stat label="Size">{formatBytes(stats.total_bytes)}</Stat>
-          <Stat label="Symbols">
-            {intelligence ? intelligence.statistics.total_symbols.toLocaleString() : "—"}
-          </Stat>
-          <Stat label="Last analysis">
-            {stats.last_analyzed_at ? (
-              <span title={formatDateTime(stats.last_analyzed_at)}>
-                {formatRelativeTime(stats.last_analyzed_at)}
-              </span>
-            ) : (
-              "Never"
-            )}
-          </Stat>
-          <Stat label="Updated">
-            <span title={formatDateTime(project.updated_at)}>
-              {formatRelativeTime(project.updated_at)}
-            </span>
-          </Stat>
-        </dl>
+        <section aria-labelledby="ask-title" className="rounded border border-border p-3">
+          <h3
+            id="ask-title"
+            className="mb-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
+          >
+            Ask about this project
+          </h3>
+          <ProjectAsk
+            projectId={project.id}
+            modes={PROJECT_ASK_MODES}
+            placeholder="e.g. What have we done in this project? How does authentication work?"
+            onOpen={(path, line) => router.push(codingHref(project.id, path, line))}
+          />
+        </section>
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-          <section aria-labelledby="explorer-title" className="rounded border border-border">
-            <h3
-              id="explorer-title"
-              className="border-b border-border px-3 py-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
-            >
-              Explorer
-            </h3>
-            <ProjectFileTree
-              projectId={project.id}
-              projectName={project.name}
-              files={files}
-              intelligence={intelligence}
-            />
-            {!intelligence && files.length > 0 && (
-              <p className="border-t border-border px-3 py-2 text-[11px] text-fg-subtle">
-                Analyze the project to list symbols for each file.
-              </p>
-            )}
-          </section>
+        <button
+          type="button"
+          aria-expanded={showDetails}
+          aria-controls="project-details"
+          onClick={() => setShowDetails((open) => !open)}
+          className={buttonClass.secondary}
+        >
+          {showDetails ? (
+            <ChevronDown aria-hidden className="size-3.5" />
+          ) : (
+            <ChevronRight aria-hidden className="size-3.5" />
+          )}
+          {showDetails ? "Hide project details" : "Show project details"}
+        </button>
 
-          <div className="space-y-4">
-            <section aria-labelledby="languages-title" className="rounded border border-border">
-              <h3
-                id="languages-title"
-                className="border-b border-border px-3 py-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
-              >
-                Languages
-              </h3>
-              {stats.languages.length === 0 ? (
-                <p className="px-3 py-3 text-xs text-fg-muted">No files yet.</p>
-              ) : (
-                <ul className="space-y-1.5 px-3 py-2.5 text-xs">
-                  {stats.languages.map((language) => (
-                    <li key={language.language} className="flex items-center gap-2">
-                      <span className="w-24 shrink-0 truncate text-fg">
-                        {backendLanguageLabel(language.language)}
-                      </span>
-                      <span className="h-1.5 flex-1 overflow-hidden rounded bg-surface-raised">
-                        <span
-                          className="block h-full rounded bg-accent"
-                          style={{ width: `${(language.files / stats.file_count) * 100}%` }}
-                        />
-                      </span>
-                      <span className="w-14 shrink-0 text-right text-fg-muted">
-                        {plural(language.files, "file")}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <section aria-labelledby="details-title" className="rounded border border-border">
-              <h3
-                id="details-title"
-                className="border-b border-border px-3 py-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
-              >
-                Details
-              </h3>
-              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 px-3 py-2.5 text-xs">
-                <dt className="text-fg-subtle">Created</dt>
-                <dd className="text-fg-muted">{formatDateTime(project.created_at)}</dd>
-                <dt className="text-fg-subtle">Storage</dt>
-                <dd className="text-fg-muted">
-                  {project.root_path ? `Linked server folder “${project.root_path}”` : "Database"}
-                </dd>
-                {intelligence && (
-                  <>
-                    <dt className="text-fg-subtle">Imports</dt>
-                    <dd className="text-fg-muted">
-                      {intelligence.statistics.internal_imports} internal ·{" "}
-                      {intelligence.statistics.external_imports} external
-                    </dd>
-                    <dt className="text-fg-subtle">Analysis errors</dt>
-                    <dd className={intelligence.errors.length ? "text-warning" : "text-fg-muted"}>
-                      {intelligence.errors.length === 0
-                        ? "None"
-                        : intelligence.errors.slice(0, 5).map((e) => (
-                            <span
-                              key={`${e.path}-${e.stage}`}
-                              className="block truncate"
-                              title={e.message}
-                            >
-                              {e.path}: {e.message}
-                            </span>
-                          ))}
-                    </dd>
-                  </>
+        {showDetails && (
+          <div id="project-details" className="space-y-5">
+            <dl className="grid grid-cols-2 gap-4 rounded border border-border bg-surface-sunken p-3 sm:grid-cols-3 lg:grid-cols-6">
+              <Stat label="Files">{stats.file_count.toLocaleString()}</Stat>
+              <Stat label="Lines">{stats.total_lines.toLocaleString()}</Stat>
+              <Stat label="Size">{formatBytes(stats.total_bytes)}</Stat>
+              <Stat label="Symbols">
+                {intelligence ? intelligence.statistics.total_symbols.toLocaleString() : "—"}
+              </Stat>
+              <Stat label="Last analysis">
+                {stats.last_analyzed_at ? (
+                  <span title={formatDateTime(stats.last_analyzed_at)}>
+                    {formatRelativeTime(stats.last_analyzed_at)}
+                  </span>
+                ) : (
+                  "Never"
                 )}
-              </dl>
-            </section>
+              </Stat>
+              <Stat label="Updated">
+                <span title={formatDateTime(project.updated_at)}>
+                  {formatRelativeTime(project.updated_at)}
+                </span>
+              </Stat>
+            </dl>
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <section aria-labelledby="explorer-title" className="rounded border border-border">
+                <h3
+                  id="explorer-title"
+                  className="border-b border-border px-3 py-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
+                >
+                  Explorer
+                </h3>
+                <ProjectFileTree
+                  projectId={project.id}
+                  projectName={project.name}
+                  files={files}
+                  intelligence={intelligence}
+                />
+                {!intelligence && files.length > 0 && (
+                  <p className="border-t border-border px-3 py-2 text-[11px] text-fg-subtle">
+                    Analyze the project to list symbols for each file.
+                  </p>
+                )}
+              </section>
+
+              <div className="space-y-4">
+                <section aria-labelledby="languages-title" className="rounded border border-border">
+                  <h3
+                    id="languages-title"
+                    className="border-b border-border px-3 py-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
+                  >
+                    Languages
+                  </h3>
+                  {stats.languages.length === 0 ? (
+                    <p className="px-3 py-3 text-xs text-fg-muted">No files yet.</p>
+                  ) : (
+                    <ul className="space-y-1.5 px-3 py-2.5 text-xs">
+                      {stats.languages.map((language) => (
+                        <li key={language.language} className="flex items-center gap-2">
+                          <span className="w-24 shrink-0 truncate text-fg">
+                            {backendLanguageLabel(language.language)}
+                          </span>
+                          <span className="h-1.5 flex-1 overflow-hidden rounded bg-surface-raised">
+                            <span
+                              className="block h-full rounded bg-accent"
+                              style={{ width: `${(language.files / stats.file_count) * 100}%` }}
+                            />
+                          </span>
+                          <span className="w-14 shrink-0 text-right text-fg-muted">
+                            {plural(language.files, "file")}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
+
+                <section aria-labelledby="details-title" className="rounded border border-border">
+                  <h3
+                    id="details-title"
+                    className="border-b border-border px-3 py-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
+                  >
+                    Details
+                  </h3>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 px-3 py-2.5 text-xs">
+                    <dt className="text-fg-subtle">Created</dt>
+                    <dd className="text-fg-muted">{formatDateTime(project.created_at)}</dd>
+                    <dt className="text-fg-subtle">Storage</dt>
+                    <dd className="text-fg-muted">
+                      {project.root_path
+                        ? `Linked server folder “${project.root_path}”`
+                        : "Database"}
+                    </dd>
+                    {intelligence && (
+                      <>
+                        <dt className="text-fg-subtle">Imports</dt>
+                        <dd className="text-fg-muted">
+                          {intelligence.statistics.internal_imports} internal ·{" "}
+                          {intelligence.statistics.external_imports} external
+                        </dd>
+                        <dt className="text-fg-subtle">Analysis errors</dt>
+                        <dd
+                          className={intelligence.errors.length ? "text-warning" : "text-fg-muted"}
+                        >
+                          {intelligence.errors.length === 0
+                            ? "None"
+                            : intelligence.errors.slice(0, 5).map((e) => (
+                                <span
+                                  key={`${e.path}-${e.stage}`}
+                                  className="block truncate"
+                                  title={e.message}
+                                >
+                                  {e.path}: {e.message}
+                                </span>
+                              ))}
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                </section>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {editing && (

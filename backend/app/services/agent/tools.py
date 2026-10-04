@@ -18,14 +18,16 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import AppError
-from app.db.models import AgentAction, AgentActionStatus, Project, ProjectFile, User
+from app.db.models import ActivityEvent, AgentAction, AgentActionStatus, Project, ProjectFile, User
 from app.repositories.files import FileRepository
 from app.schemas.agent import AgentRunRequest, ProposedChange, ToolPermission
 from app.schemas.ai import CodeEdit, DiagnosticInput
@@ -573,6 +575,73 @@ def _symbol_name(name: str | None) -> str | None:
     return name
 
 
+MAX_ACTIVITY_EVENTS = 40
+_ACTIVITY_KINDS = {"project": "project.", "files": "file.", "ai": "ai.", "agent": "agent."}
+
+
+class ActivityArgs(_Args):
+    limit: int = Field(default=20, ge=1, le=MAX_ACTIVITY_EVENTS, description="Most recent events to return.")
+    since_days: int | None = Field(
+        default=None, ge=1, le=365, description="Only events from the last N days."
+    )
+    kind: Literal["all", "project", "files", "ai", "agent"] = Field(
+        default="all", description="Only project, file, AI, or agent events."
+    )
+
+
+class ActivityItem(BaseModel):
+    at: datetime
+    type: str
+    file_path: str | None
+    details: dict[str, Any]
+
+
+class ActivityOut(BaseModel):
+    project: str
+    events: list[ActivityItem]
+    note: str
+
+
+def _compact_details(details: dict[str, Any]) -> dict[str, Any]:
+    """Scalar values only, short strings, few keys: enough to say what happened, nothing more."""
+    out: dict[str, Any] = {}
+    for key, value in list(details.items())[:8]:
+        if isinstance(value, bool | int | float) or value is None:
+            out[key] = value
+        elif isinstance(value, str):
+            out[key] = value[:120]
+    return out
+
+
+def get_project_activity(ctx: ToolContext, args: ActivityArgs) -> tuple[ActivityOut, str]:
+    """What the developer did in this project (created/edited/analyzed files, AI and agent use), newest
+    first. Only this user's events for this project."""
+    query = select(ActivityEvent).where(
+        ActivityEvent.project_id == ctx.project.id, ActivityEvent.user_id == ctx.owner.id
+    )
+    if args.since_days is not None:
+        query = query.where(ActivityEvent.created_at >= datetime.now(UTC) - timedelta(days=args.since_days))
+    prefix = _ACTIVITY_KINDS.get(args.kind)
+    rows = ctx.session.scalars(
+        query.order_by(ActivityEvent.created_at.desc()).limit(MAX_ACTIVITY_EVENTS * 3)
+    ).all()
+    events = [
+        ActivityItem(
+            at=row.created_at,
+            type=row.event_type.value,
+            file_path=row.file_path,
+            details=_compact_details(row.details or {}),
+        )
+        for row in rows
+        if prefix is None or row.event_type.value.startswith(prefix)
+    ][: args.limit]
+    note = "Activity is what was recorded in CodeWalk (file saves, analyses, AI and agent use); "
+    note += "it does not include work done outside CodeWalk or git history."
+    return ActivityOut(project=ctx.project.name, events=events, note=note), (
+        f"Read {len(events)} recent activity event(s)"
+    )
+
+
 def get_architecture(ctx: ToolContext, _: NoArgs) -> tuple[insights.ArchitectureReport, str]:
     report = insights.architecture(ctx.index)
     # Keep the tool result compact: the model sees the biggest parts of each list.
@@ -1045,6 +1114,17 @@ TOOLS: dict[str, ToolSpec] = {
             FindingOut,
             record_finding,
             progress="Recording a review finding…",
+        ),
+        ToolSpec(
+            "get_project_activity",
+            "Recent activity in this project, newest first: files created/edited/restored/deleted, analyses, "
+            "AI explanations and fixes, agent runs and applied/rejected proposals. Use it only for questions "
+            "about what was done or changed (e.g. 'what have we done', 'what changed yesterday').",
+            ToolPermission.READ_ONLY,
+            ActivityArgs,
+            ActivityOut,
+            get_project_activity,
+            progress="Reading recent project activity…",
         ),
         ToolSpec(
             "propose_fix",

@@ -84,6 +84,26 @@ describe("ProjectsPage", () => {
     expect(screen.getByText("2 projects")).toBeInTheDocument();
   });
 
+  it("includes uploaded projects, marked and linked to their analysis view", async () => {
+    const fetchMock = renderPage(<ProjectsPage />, [
+      workspaceDisabled,
+      [
+        "GET",
+        /^\/projects$/,
+        () =>
+          json(page([makeProject(), makeProject({ id: "u1", name: "atharva", origin: "upload" })])),
+      ],
+    ]);
+    const upload = await screen.findByRole("link", { name: /atharva/ });
+    expect(upload).toHaveAttribute("href", "/app/uploads/u1");
+    expect(within(upload).getByText("Uploaded")).toBeInTheDocument();
+    const workspace = screen.getByRole("link", { name: /Payments service/ });
+    expect(workspace).toHaveAttribute("href", "/app/projects/p1");
+    expect(within(workspace).queryByText("Uploaded")).not.toBeInTheDocument();
+    const list = requestsOf(fetchMock).find((r) => r.path === "/projects")!;
+    expect(new URLSearchParams(list.search).has("origin")).toBe(false);
+  });
+
   it("shows an empty state that creates a project", async () => {
     renderPage(<ProjectsPage />, [
       workspaceDisabled,
@@ -187,6 +207,16 @@ describe("ProjectDetailPage", () => {
     ]);
     expect(await screen.findByRole("heading", { name: "Payments service" })).toBeInTheDocument();
     expect(screen.getByText("Billing and invoices")).toBeInTheDocument();
+    // The page leads with a question box; details are shown on request.
+    expect(screen.getByRole("region", { name: "Ask about this project" })).toBeInTheDocument();
+    expect(screen.queryByText("Never")).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Show project details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Hide project details" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(screen.getByText("Never")).toBeInTheDocument(); // last analysis
     expect(screen.getByRole("link", { name: "app.py" })).toHaveAttribute(
       "href",

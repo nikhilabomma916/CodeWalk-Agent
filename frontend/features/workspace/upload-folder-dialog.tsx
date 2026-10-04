@@ -157,7 +157,7 @@ export function UploadFolderDialog({
   };
 
   const primary =
-    "rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-60";
+    "rounded bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-60";
   const secondary =
     "rounded border border-border px-3 py-1.5 text-xs hover:bg-surface-hover disabled:opacity-60";
   const preSkipped = selection.skipped;

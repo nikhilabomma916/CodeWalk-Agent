@@ -104,6 +104,11 @@ export interface WorkspaceActions {
   editFile(path: ProjectPath, content: string): void;
   saveFile(path: ProjectPath): Promise<boolean>;
   createFile(path: ProjectPath): Promise<void>;
+  /**
+   * Coding "+ New File": creates a code file from a file name only (at the project root) and opens it.
+   * Rejects with a SourceError ("exists", "invalid", "read-only", ...) for the dialog to show.
+   */
+  createCodeFile(name: string): Promise<void>;
   setLanguage(path: ProjectPath, language: LanguageId | null): void;
   updateSettings(settings: Partial<EditorSettings>): void;
   replaceDiagnostics(source: string, path: ProjectPath, diagnostics: Diagnostic[]): void;
@@ -434,6 +439,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (sourceRef.current !== source) return;
         dispatch({ type: "file/created", path });
         dispatch({ type: "tab/opened", path });
+      },
+
+      async createCodeFile(name) {
+        const source = sourceRef.current;
+        if (!source) return;
+        const fileName = name.trim();
+        if (source.createCodeFile) await source.createCodeFile(fileName);
+        else await source.createFile(fileName);
+        if (sourceRef.current !== source) return;
+        dispatch({ type: "file/created", path: fileName });
+        dispatch({ type: "tab/opened", path: fileName });
       },
 
       setLanguage(path, language) {

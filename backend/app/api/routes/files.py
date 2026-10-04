@@ -12,6 +12,7 @@ from app.schemas.analysis import AnalysisRecord, AnalysisRecordDetail
 from app.schemas.common import Page
 from app.schemas.errors import ErrorResponse
 from app.schemas.projects import (
+    CodeFileCreate,
     FileCreate,
     FileDetail,
     FileImportRequest,
@@ -70,6 +71,24 @@ def _saved(record: ProjectFile, analysis: Analysis | None) -> FileSaveResponse:
 )
 def create_file(project_id: uuid.UUID, data: FileCreate, service: FileServiceDep) -> FileSaveResponse:
     return _saved(*service.create(project_id, data))
+
+
+@router.post(
+    "/code-file",
+    response_model=FileSaveResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a code file from a file name (Coding: New File)",
+    description=(
+        "Creates an empty file at the project root. Only a file name is accepted (no folders, '.', '..', "
+        "absolute paths, or control characters) with a programming/development extension (.py, .js, .ts, "
+        ".java, .c, .cpp, .cs, .go, .rs, .html, .css, .sql, .json, .yaml, .md, ...). 409 `file_exists` if "
+        "it already exists (never overwritten); 422 `invalid_file_name` / `unsupported_file_type`."
+    ),
+)
+def create_code_file(
+    project_id: uuid.UUID, data: CodeFileCreate, service: FileServiceDep
+) -> FileSaveResponse:
+    return _saved(*service.create_code_file(project_id, data.name))
 
 
 class FileImportResponse(BaseModel):

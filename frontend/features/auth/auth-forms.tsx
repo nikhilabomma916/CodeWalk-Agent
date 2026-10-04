@@ -105,7 +105,7 @@ function SubmitButton({
     <button
       type="submit"
       disabled={busy}
-      className="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-strong disabled:opacity-60"
+      className="w-full rounded bg-accent px-3 py-2 text-sm font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-60"
     >
       {busy ? busyLabel : label}
     </button>
@@ -196,7 +196,7 @@ export function LoginForm() {
       <SubmitButton busy={busy} label="Sign in" busyLabel="Signing in…" />
       <p className="text-center text-xs text-fg-muted">
         No account yet?{" "}
-        <Link href={registerHref} className="text-accent hover:underline">
+        <Link href={registerHref} className="text-accent-text hover:underline">
           Create one
         </Link>
       </p>
@@ -291,7 +291,7 @@ export function RegisterForm() {
       <SubmitButton busy={busy} label="Create account" busyLabel="Creating account…" />
       <p className="text-center text-xs text-fg-muted">
         Already have an account?{" "}
-        <Link href={loginHref} className="text-accent hover:underline">
+        <Link href={loginHref} className="text-accent-text hover:underline">
           Sign in
         </Link>
       </p>

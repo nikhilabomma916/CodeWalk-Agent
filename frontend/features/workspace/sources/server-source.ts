@@ -1,6 +1,7 @@
 import { ancestorPaths } from "@/lib/project-paths";
 import { isApiError } from "@/services/api/errors";
 import {
+  createCodeFile,
   createFile,
   getFileContent,
   listFiles,
@@ -19,6 +20,8 @@ function toSourceError(error: unknown, path: string): SourceError {
       return new SourceError("not-found", `${path} no longer exists on the server.`);
     if (error.code === "file_exists") return new SourceError("exists", `${path} already exists.`);
     if (error.code === "project_read_only") return new SourceError("read-only", error.message);
+    if (error.code === "invalid_file_name" || error.code === "unsupported_file_type")
+      return new SourceError("invalid", error.message);
     if (error.status === 413) return new SourceError("too-large", error.message);
     return new SourceError("io", `${error.message} (${path})`, { cause: error });
   }
@@ -100,6 +103,15 @@ export class ServerProjectSource implements ProjectSource {
       this.remember(await createFile(this.serverProjectId, path, ""));
     } catch (error) {
       throw toSourceError(error, path);
+    }
+  }
+
+  async createCodeFile(name: string): Promise<void> {
+    if (this.readOnly) throw new SourceError("read-only", "This project is read-only.");
+    try {
+      this.remember(await createCodeFile(this.serverProjectId, name));
+    } catch (error) {
+      throw toSourceError(error, name);
     }
   }
 }

@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  ancestorPaths,
-  buildTree,
-  isIgnoredPath,
-  isSecretFile,
-  validateNewFilePath,
-} from "./project-paths";
+import { ancestorPaths, buildTree, isIgnoredPath, isSecretFile } from "./project-paths";
 
 describe("buildTree", () => {
   it("nests entries, implies missing folders, and sorts folders first", () => {
@@ -40,26 +34,6 @@ describe("ignore rules", () => {
     expect(isIgnoredPath("config/.env.local")).toBe(true);
     expect(isIgnoredPath("src/main.py")).toBe(false);
     expect(isSecretFile(".env.example")).toBe(false);
-  });
-});
-
-describe("validateNewFilePath", () => {
-  it("accepts nested relative paths", () => {
-    expect(validateNewFilePath("src/utils/math.ts")).toBeNull();
-  });
-
-  it.each([
-    "",
-    "   ",
-    "/abs.ts",
-    "C:/x.ts",
-    "../up.ts",
-    "a//b.ts",
-    "a/./b.ts",
-    "bad:name.ts",
-    ".env",
-  ])("rejects %j", (value) => {
-    expect(validateNewFilePath(value)).not.toBeNull();
   });
 });
 

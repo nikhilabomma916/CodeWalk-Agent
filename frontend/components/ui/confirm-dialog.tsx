@@ -34,8 +34,8 @@ interface PendingConfirm {
 }
 
 const VARIANT_CLASSES: Record<NonNullable<ConfirmAction<string>["variant"]>, string> = {
-  primary: "bg-accent text-white hover:bg-accent-strong",
-  danger: "bg-danger/90 text-white hover:bg-danger",
+  primary: "bg-accent text-on-accent hover:bg-accent-strong hover:text-on-accent-hover",
+  danger: "bg-danger-strong text-on-danger hover:opacity-90",
   default: "bg-surface-raised text-fg hover:bg-surface-hover border border-border",
 };
 

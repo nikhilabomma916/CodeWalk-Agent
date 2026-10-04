@@ -132,11 +132,11 @@ export function Welcome({
 
         <div className="mt-5 flex flex-col gap-2 sm:flex-row">
           <button type="button" onClick={onNewProject} className={button}>
-            <FolderPlus aria-hidden className="size-4 text-accent" />
+            <FolderPlus aria-hidden className="size-4 text-accent-text" />
             Create project
           </button>
           <button type="button" onClick={onOpenFolder} className={button}>
-            <FolderOpen aria-hidden className="size-4 text-accent" />
+            <FolderOpen aria-hidden className="size-4 text-accent-text" />
             Open local folder
           </button>
         </div>
@@ -147,7 +147,7 @@ export function Welcome({
             <h3 className="flex-1 text-xs font-semibold tracking-wider text-fg-muted uppercase">
               Open a project
             </h3>
-            <Link href="/app/projects" className="text-[11px] text-accent hover:underline">
+            <Link href="/app/projects" className="text-[11px] text-accent-text hover:underline">
               Manage projects
             </Link>
             {serverProjects.status !== "unavailable" && (

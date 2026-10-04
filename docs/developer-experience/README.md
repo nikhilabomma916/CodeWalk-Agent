@@ -19,6 +19,26 @@ still edits a folder in place in the browser, but those server features need an 
 - **Open project** opens it in the workspace and analyzes it (files, symbols, imports). Code is
   analyzed, never executed.
 
+## New code files (Coding → Explorer → New File)
+
+**New File** asks only for a file name (for example `main.py`); the file is created at the project root
+and opens in the editor with diagnostics. There is no folder step. Allowed: .py .js .jsx .ts .tsx .java
+.c .h .cpp .cc .cxx .hpp .cs .go .rs .html .css .scss .sql .json .yaml .yml .md. Folders, `..`,
+absolute paths, control characters, credential files, and binary/media types are rejected (by the
+browser for quick feedback and by the server, `POST /projects/{id}/files/code-file`). An existing file
+is never overwritten: the dialog offers **Open existing file**. Existing folder structures are kept.
+
+## Project page
+
+The project page leads with **Ask about this project** (the agent answers only what was asked; cited
+files open in Coding; proposed changes are reviewed in Coding). Statistics, files, languages, and
+details are behind **Show project details**.
+
+## Light and dark themes
+
+The theme switch is in the navigation rail and on the sign-in pages. The choice is saved in this
+browser only (or follows the system setting); the editor switches with it without losing its state.
+
 ## Agent panel (bottom panel → Agent)
 
 - **Workflow selector**: Ask / fix, Code review, Generate tests, Write documentation, Refactor

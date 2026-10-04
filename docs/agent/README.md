@@ -24,7 +24,7 @@ same for every mode.
 
 ## Tools
 
-16 tools; the model can call only `read_only` and `proposed_change` tools (WRITE is never in its
+17 tools; the model can call only `read_only` and `proposed_change` tools (WRITE is never in its
 permission set; `test_tools_have_permissions_and_no_write_tools` pins the full inventory).
 
 New in Module 17:
@@ -32,6 +32,7 @@ New in Module 17:
 | Tool | Permission | Notes |
 | --- | --- | --- |
 | `get_architecture` | read_only | Deterministic summary (see insights below) |
+| `get_project_activity` | read_only | Recent activity of this project for this user only (file saves, analyses, AI and agent use), newest first, bounded (≤ 40 events, trimmed details); for "what have we done / what changed" questions |
 | `analyze_impact` | read_only | Dependents through resolved imports (**confirmed**), same-name mentions (**possible**), related tests and HTTP routes |
 | `find_references` | read_only | Definitions and referencing files, labelled confirmed/possible |
 | `find_related_tests` | read_only | Test files importing a file (confirmed) or named after it (possible) |
@@ -109,3 +110,12 @@ developer runs them.
 Each run stores `usage`: provider calls, input and output tokens (as reported by the provider), tool
 calls, and the largest prompt size. Reaching a limit ends the run as `limit_reached` with a warning
 naming the limit.
+
+## Focused answers
+
+Policy rule 8 tells the agent to answer the developer's actual question and nothing more: it fetches
+only the context the question needs (the open file and selection for a line or function, activity for
+"what have we done", architecture for architecture questions), does not volunteer unrelated project
+information, answers general coding questions without tools, and cites file:line only when the answer
+rests on project code. Tests check that a general question sends no project files and that history
+comes only from the user's own project.

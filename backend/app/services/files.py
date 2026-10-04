@@ -8,14 +8,24 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from pathlib import PurePosixPath
 
 from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import AppError, ConflictError, NotFoundError
-from app.db.models import ActivityType, Analysis, FileVersion, FileVersionSource, Project, ProjectFile, User
+from app.core.exceptions import AppError, ConflictError, NotFoundError, UnsafePathError
+from app.db.models import (
+    ActivityType,
+    Analysis,
+    FileVersion,
+    FileVersionSource,
+    Project,
+    ProjectFile,
+    ProjectOrigin,
+    User,
+)
 from app.repositories.file_versions import FileVersionRepository
 from app.repositories.files import FileRepository
 from app.repositories.projects import ProjectRepository
@@ -26,8 +36,50 @@ from app.services.analysis.service import AnalysisService
 from app.services.file_content import file_values
 from app.services.project_intelligence.scanner import DEFAULT_IGNORED_DIRECTORIES, is_secret_path
 from app.services.projects import ProjectService
+from app.utils.paths import normalize_relative_path
 
 _RELATIVE_PATH: TypeAdapter[str] = TypeAdapter(RelativePath)
+
+# Files a developer can create directly in Coding (programming and development files only).
+CODE_FILE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".java",
+        ".c",
+        ".h",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".cs",
+        ".go",
+        ".rs",
+        ".html",
+        ".css",
+        ".scss",
+        ".sql",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".md",
+    }
+)
+MAX_CODE_FILE_NAME_LENGTH = 255
+_FORBIDDEN_NAME_CHARACTERS = frozenset('<>:"|?*')
+
+
+class InvalidFileNameError(AppError):
+    status_code = 422
+    code = "invalid_file_name"
+
+
+class UnsupportedFileTypeError(AppError):
+    status_code = 422
+    code = "unsupported_file_type"
 
 
 class ContentTooLargeError(AppError):
@@ -114,6 +166,37 @@ class FileService:
             self.session.rollback()
             raise ConflictError(f"{data.path} already exists.", code="file_exists") from None
         return record, analysis
+
+    def create_code_file(self, project_id: uuid.UUID, name: str) -> tuple[ProjectFile, Analysis | None]:
+        """Creates an empty code file at the project root from a file name only (Coding: "+ New File").
+
+        Stricter than the general file API: no folders, a programming/development extension, and
+        never an existing file (409). Uploaded projects are analysis copies and are not edited here.
+        """
+        if self.projects.get(project_id).origin is ProjectOrigin.UPLOAD:
+            raise ConflictError("Uploaded projects are read-only analysis copies.", code="project_read_only")
+        name = name.strip()
+        if not name:
+            raise InvalidFileNameError("Enter a file name, for example main.py.")
+        if len(name) > MAX_CODE_FILE_NAME_LENGTH:
+            raise InvalidFileNameError(f"File names can have at most {MAX_CODE_FILE_NAME_LENGTH} characters.")
+        if "/" in name or "\\" in name:
+            raise InvalidFileNameError("Enter a file name only, without folders.")
+        if name in {".", ".."} or any(ord(c) < 32 or ord(c) == 127 for c in name):
+            raise InvalidFileNameError("The file name contains characters that are not allowed.")
+        if any(c in _FORBIDDEN_NAME_CHARACTERS for c in name):
+            raise InvalidFileNameError('File names cannot contain < > : " | ? *.')
+        try:
+            normalize_relative_path(name)  # the shared path rules (absolute paths, drives, ..)
+        except UnsafePathError as exc:
+            raise InvalidFileNameError(exc.message) from None
+        if is_secret_path(name):
+            raise InvalidFileNameError("Credentials files such as .env are not created in Coding.")
+        if PurePosixPath(name).suffix.lower() not in CODE_FILE_EXTENSIONS:
+            raise UnsupportedFileTypeError(
+                "Unsupported file type. CodeWalk Coding supports programming and development files."
+            )
+        return self.create(project_id, FileCreate(path=name, content=""))
 
     def import_files(
         self, project_id: uuid.UUID, items: Sequence[FileImportItem]

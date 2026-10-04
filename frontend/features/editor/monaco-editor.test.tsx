@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { render, waitFor } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { ThemeProvider } from "@/features/theme/theme-context";
 import { DEFAULT_EDITOR_SETTINGS, type RevealRequest } from "@/features/workspace/state";
+import { setThemePreference } from "@/lib/theme";
 
 import MonacoEditor, { type MonacoEditorProps } from "./monaco-editor";
 
@@ -12,11 +14,19 @@ import MonacoEditor, { type MonacoEditorProps } from "./monaco-editor";
  * component does after loading, and records where the caret was placed.
  */
 const positions: { lineNumber: number; column: number }[] = [];
+/** The `theme` prop of every render, and how many times the editor mounted. */
+const themes: string[] = [];
+let mounts = 0;
 
 vi.mock("@monaco-editor/react", () => ({
   loader: { config: () => undefined, init: () => Promise.resolve({}) },
-  default: function EditorStub(props: { onMount?: (instance: unknown, monaco: unknown) => void }) {
+  default: function EditorStub(props: {
+    theme?: string;
+    onMount?: (instance: unknown, monaco: unknown) => void;
+  }) {
+    themes.push(props.theme ?? "");
     useEffect(() => {
+      mounts += 1;
       const timer = setTimeout(() => {
         const instance = {
           addCommand: () => undefined,
@@ -88,5 +98,31 @@ describe("MonacoEditor reveal", () => {
       <MonacoEditor {...props({ path: "src/auth/service.py", line: 4, column: 2, nonce: 103 })} />,
     );
     await waitFor(() => expect(positions).toEqual([{ lineNumber: 4, column: 2 }]));
+  });
+});
+
+describe("MonacoEditor theme", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    delete document.documentElement.dataset.theme;
+  });
+
+  it("follows the app theme without remounting the editor", async () => {
+    themes.length = 0;
+    mounts = 0;
+    document.documentElement.dataset.theme = "dark";
+    render(
+      <ThemeProvider>
+        <MonacoEditor {...props(null)} />
+      </ThemeProvider>,
+    );
+    await waitFor(() => expect(mounts).toBe(1));
+    expect(themes.at(-1)).toBe("codewalk-dark");
+
+    act(() => setThemePreference("light"));
+    expect(themes.at(-1)).toBe("codewalk-light");
+    act(() => setThemePreference("dark"));
+    expect(themes.at(-1)).toBe("codewalk-dark");
+    expect(mounts).toBe(1); // same editor instance: content, cursor, and undo history are kept
   });
 });

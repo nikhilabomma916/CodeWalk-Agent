@@ -2,6 +2,7 @@ import { loader } from "@monaco-editor/react";
 import type * as MonacoModule from "monaco-editor";
 import type { editor } from "monaco-editor";
 
+import type { Theme } from "@/lib/theme";
 import type { Diagnostic } from "@/types/diagnostics";
 
 /** Monaco is served from /public/monaco (copied from node_modules by scripts/copy-monaco.mjs). */
@@ -13,7 +14,15 @@ loader.config({ paths: { vs: "/monaco/vs" } });
  */
 export type Monaco = typeof MonacoModule;
 
-export const THEME_NAME = "codewalk-dark";
+/** Monaco theme per app theme. Switching the `theme` prop only calls setTheme: no remount, no lost state. */
+export const MONACO_THEMES: Record<Theme, string> = {
+  dark: "codewalk-dark",
+  light: "codewalk-light",
+};
+
+export function monacoTheme(theme: Theme): string {
+  return MONACO_THEMES[theme];
+}
 
 /** Marker owner for diagnostics coming from the backend analysis engine. */
 export const ANALYSIS_MARKER_OWNER = "codewalk-analysis";
@@ -29,17 +38,42 @@ export function configureMonaco(monaco: Monaco): void {
   if (configured) return;
   configured = true;
 
-  monaco.editor.defineTheme(THEME_NAME, {
+  // Editor colours mirror the app tokens in globals.css (Monaco cannot read CSS variables).
+  monaco.editor.defineTheme(MONACO_THEMES.dark, {
     base: "vs-dark",
     inherit: true,
     rules: [],
     colors: {
-      "editor.background": "#16181d",
-      "editor.lineHighlightBackground": "#1f222a",
-      "editorGutter.background": "#16181d",
-      "editorLineNumber.foreground": "#4b5263",
-      "editorLineNumber.activeForeground": "#aeb4c0",
-      "minimap.background": "#16181d",
+      "editor.background": "#131b36",
+      "editor.lineHighlightBackground": "#182447",
+      "editorGutter.background": "#131b36",
+      "editorLineNumber.foreground": "#6f82a3",
+      "editorLineNumber.activeForeground": "#b8c1d1",
+      "editor.selectionBackground": "#43597c99",
+      "editor.inactiveSelectionBackground": "#43597c55",
+      "editorCursor.foreground": "#f5f7fa",
+      "editorWidget.background": "#143559",
+      "editorWidget.border": "#43597c",
+      "minimap.background": "#131b36",
+    },
+  });
+  monaco.editor.defineTheme(MONACO_THEMES.light, {
+    base: "vs",
+    inherit: true,
+    rules: [],
+    colors: {
+      "editor.background": "#ffffff",
+      "editor.lineHighlightBackground": "#fafaf8",
+      "editor.lineHighlightBorder": "#f0f0ec",
+      "editorGutter.background": "#ffffff",
+      "editorLineNumber.foreground": "#9a9a9a",
+      "editorLineNumber.activeForeground": "#242424",
+      "editor.selectionBackground": "#ffd5c899",
+      "editor.inactiveSelectionBackground": "#ffe6de99",
+      "editorCursor.foreground": "#0b0b0b",
+      "editorWidget.background": "#ffffff",
+      "editorWidget.border": "#eaeaea",
+      "minimap.background": "#ffffff",
     },
   });
 
