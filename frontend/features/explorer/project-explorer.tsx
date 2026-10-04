@@ -8,11 +8,11 @@ import { StateMessage } from "@/components/ui/state-message";
 import { MAX_PROJECT_ENTRIES } from "@/features/workspace/sources/types";
 import { isDirty } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
-import { ancestorPaths, dirname } from "@/lib/project-paths";
+import { ancestorPaths } from "@/lib/project-paths";
 import type { ProjectTreeNode } from "@/types/project";
 
 import { FileIcon, FolderIcon } from "./file-icon";
-import { NewFileForm } from "./new-file-form";
+import { CodeFileDialog } from "./code-file-dialog";
 import { flattenVisible } from "./visible-nodes";
 
 function treeItemId(path: string): string {
@@ -83,7 +83,7 @@ export function ProjectExplorer() {
   const { project, projectStatus, projectError, activePath, buffers } = state;
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [focusedPath, setFocusedPath] = useState<string | null>(null);
-  const [creatingIn, setCreatingIn] = useState<string | null>(null);
+  const [creatingFile, setCreatingFile] = useState(false);
   const treeRef = useRef<HTMLDivElement>(null);
 
   // Keep the active file's folders expanded so it is always visible. (State is
@@ -168,12 +168,6 @@ export function ProjectExplorer() {
     if (handled) event.preventDefault();
   };
 
-  const targetFolder = () => {
-    const focused = visible.find((item) => item.node.path === focusedPath)?.node;
-    if (!focused) return "";
-    return focused.type === "folder" ? focused.path : dirname(focused.path);
-  };
-
   let content: React.ReactNode;
   if (projectStatus === "loading") {
     content = <StateMessage title="Loading project…" />;
@@ -189,17 +183,17 @@ export function ProjectExplorer() {
         Create a project or open a folder to get started.
       </StateMessage>
     );
-  } else if (tree.children.length === 0 && creatingIn === null) {
+  } else if (tree.children.length === 0) {
     content = (
       <StateMessage
         title="No files in this project."
         action={
           <button
             type="button"
-            onClick={() => setCreatingIn("")}
+            onClick={() => setCreatingFile(true)}
             className="mt-1 rounded border border-border px-2 py-1 text-xs hover:bg-surface-hover"
           >
-            New file
+            New File
           </button>
         }
       />
@@ -239,9 +233,16 @@ export function ProjectExplorer() {
         </h2>
         {project && projectStatus === "ready" && (
           <>
-            <IconButton label="New file" onClick={() => setCreatingIn(targetFolder())}>
-              <FilePlus aria-hidden className="size-4" />
-            </IconButton>
+            {!project.readOnly && (
+              <button
+                type="button"
+                onClick={() => setCreatingFile(true)}
+                className="flex h-6 items-center gap-1 rounded px-1.5 text-[11px] text-fg-muted hover:bg-surface-hover hover:text-fg"
+              >
+                <FilePlus aria-hidden className="size-3.5" />
+                New File
+              </button>
+            )}
             <IconButton
               label="Collapse all folders"
               onClick={() => setExpanded(new Set())}
@@ -252,13 +253,12 @@ export function ProjectExplorer() {
           </>
         )}
       </div>
-      {creatingIn !== null && (
-        <NewFileForm
-          parentPath={creatingIn}
-          onCreate={actions.createFile}
-          onDone={() => setCreatingIn(null)}
-        />
-      )}
+      <CodeFileDialog
+        open={creatingFile}
+        onClose={() => setCreatingFile(false)}
+        onCreate={actions.createCodeFile}
+        onOpenExisting={(name) => void actions.openFile(name)}
+      />
       {content}
       {project && (project.skippedEntries > 0 || project.truncated) && (
         <p className="shrink-0 border-t border-border px-3 py-1.5 text-[11px] text-fg-subtle">

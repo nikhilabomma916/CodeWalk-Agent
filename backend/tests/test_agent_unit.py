@@ -41,6 +41,7 @@ def test_tools_have_permissions_and_no_write_tools() -> None:
         "get_symbol",
         "explain_error",
         "get_architecture",
+        "get_project_activity",
         "analyze_impact",
         "find_references",
         "find_related_tests",

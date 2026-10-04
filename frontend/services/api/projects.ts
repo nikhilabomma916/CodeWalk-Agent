@@ -185,6 +185,19 @@ export async function importFiles(
   return data;
 }
 
+/** Coding "+ New File": an empty file at the project root, from a file name only. */
+export async function createCodeFile(
+  projectId: string,
+  name: string,
+  client: ApiClient = apiClient,
+): Promise<ServerFile> {
+  const { data } = await client.request(
+    `/projects/${encodeURIComponent(projectId)}/files/code-file`,
+    { method: "POST", body: { name }, schema: fileSaveSchema },
+  );
+  return data.file;
+}
+
 export async function updateFileContent(
   projectId: string,
   fileId: string,

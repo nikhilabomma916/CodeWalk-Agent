@@ -64,30 +64,6 @@ export function ancestorPaths(path: ProjectPath): ProjectPath[] {
   return segments.map((_, index) => segments.slice(0, index + 1).join("/"));
 }
 
-const INVALID_NAME_CHARS = /[<>:"|?*\\\u0000-\u001f]/;
-
-/**
- * Validates a user-typed relative file path such as "src/utils/math.ts".
- * Returns an error message, or null when valid.
- */
-export function validateNewFilePath(raw: string): string | null {
-  const path = raw.trim();
-  if (!path) return "Enter a file name.";
-  if (path.startsWith("/") || /^[a-zA-Z]:/.test(path))
-    return "Use a path relative to the project root.";
-  const segments = path.split("/");
-  for (const segment of segments) {
-    if (!segment) return "Path segments cannot be empty.";
-    if (segment === "." || segment === "..") return "'.' and '..' are not allowed.";
-    if (INVALID_NAME_CHARS.test(segment))
-      return `"${segment}" contains characters that are not allowed.`;
-    if (segment.length > 255) return "Names must be 255 characters or fewer.";
-  }
-  const name = segments[segments.length - 1];
-  if (isSecretFile(name)) return "Secret files such as .env are not managed in the workspace.";
-  return null;
-}
-
 function compareNodes(a: ProjectTreeNode, b: ProjectTreeNode): number {
   if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
   return a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });

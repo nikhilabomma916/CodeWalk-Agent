@@ -187,6 +187,16 @@ describe("ProjectDetailPage", () => {
     ]);
     expect(await screen.findByRole("heading", { name: "Payments service" })).toBeInTheDocument();
     expect(screen.getByText("Billing and invoices")).toBeInTheDocument();
+    // The page leads with a question box; details are shown on request.
+    expect(screen.getByRole("region", { name: "Ask about this project" })).toBeInTheDocument();
+    expect(screen.queryByText("Never")).not.toBeInTheDocument();
+    const toggle = screen.getByRole("button", { name: "Show project details" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(toggle);
+    expect(screen.getByRole("button", { name: "Hide project details" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(screen.getByText("Never")).toBeInTheDocument(); // last analysis
     expect(screen.getByRole("link", { name: "app.py" })).toHaveAttribute(
       "href",

@@ -145,7 +145,7 @@ def test_agent_unavailable_without_ai(api: TestClient, anonymous: TestClient, en
     status = api.get("/api/v1/agent/status").json()
     assert status["available"] is False
     assert "CODEWALK_AI_ENABLED" in status["detail"]
-    assert len(status["tools"]) == 16
+    assert len(status["tools"]) == 17
     response = run(api, project)
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "ai_disabled"

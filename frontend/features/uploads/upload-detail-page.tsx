@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { buttonClass, PageFrame } from "@/components/ui/page-frame";
+import { ProjectAsk, type AskModeOption } from "@/features/agent/project-ask";
 import { StateMessage } from "@/components/ui/state-message";
 import {
   ArchitectureView,
@@ -13,7 +14,6 @@ import {
 } from "@/features/insights/insights-panel";
 import { LanguageList } from "@/features/projects/projects-page";
 import { formatRelativeTime, plural } from "@/lib/format";
-import { getAgentStatus, runAgent, type AgentRun, type AgentStatus } from "@/services/api/agent";
 import { isApiError } from "@/services/api/errors";
 import {
   getArchitecture,
@@ -56,8 +56,7 @@ const ASK_MODES = [
   { id: "review", label: "Review the selected file" },
   { id: "impact", label: "What could break?" },
   { id: "architecture", label: "Explain the architecture" },
-] as const;
-type AskMode = (typeof ASK_MODES)[number]["id"];
+] as const satisfies readonly AskModeOption[];
 
 const label = "block text-[11px] text-fg-muted";
 const input =
@@ -76,225 +75,6 @@ function ErrorText({ text }: { text: string }) {
     <p role="alert" className="text-xs text-danger">
       {text}
     </p>
-  );
-}
-
-// --- Ask ------------------------------------------------------------------------------------
-
-function AskPanel({
-  projectId,
-  selectedPath,
-  onOpen,
-}: {
-  projectId: string;
-  selectedPath: string | null;
-  onOpen: OpenLocation;
-}) {
-  const [status, setStatus] = useState<Remote<AgentStatus>>({ state: "loading" });
-  const [mode, setMode] = useState<AskMode>("assist");
-  const [question, setQuestion] = useState("");
-  const [useFile, setUseFile] = useState(true);
-  const [run, setRun] = useState<Remote<AgentRun>>({ state: "idle" });
-  const abort = useRef<AbortController | null>(null);
-  const modeId = useId();
-  const questionId = useId();
-
-  useEffect(() => {
-    let cancelled = false;
-    getAgentStatus()
-      .then((data) => !cancelled && setStatus({ state: "ready", data }))
-      .catch(
-        (e) =>
-          !cancelled &&
-          setStatus({ state: "error", message: message(e, "Agent status unavailable.") }),
-      );
-    return () => {
-      cancelled = true;
-      abort.current?.abort();
-    };
-  }, []);
-
-  const unavailable =
-    status.state === "ready" && !status.data.available
-      ? status.data.detail || "The agent is not available."
-      : status.state === "error"
-        ? status.message
-        : null;
-  const running = run.state === "loading";
-
-  const ask = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!question.trim() || running || unavailable) return;
-    const controller = new AbortController();
-    abort.current = controller;
-    setRun({ state: "loading" });
-    try {
-      const data = await runAgent(
-        {
-          projectId,
-          message: question.trim(),
-          mode,
-          filePath: useFile && selectedPath ? selectedPath : undefined,
-        },
-        undefined,
-        controller.signal,
-      );
-      setRun({ state: "ready", data });
-    } catch (e) {
-      if (controller.signal.aborted) setRun({ state: "idle" });
-      else setRun({ state: "error", message: message(e, "The agent could not answer.") });
-    } finally {
-      abort.current = null;
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      {status.state === "loading" && <Spinner text="Checking the agent…" />}
-      {unavailable && (
-        <p
-          role="status"
-          className="rounded border border-border bg-surface-sunken px-2 py-1.5 text-xs text-fg-muted"
-        >
-          Agent unavailable: {unavailable} Search, overview, and impact analysis still work.
-        </p>
-      )}
-      <form onSubmit={ask} className="space-y-2">
-        <div className="flex flex-wrap items-end gap-2">
-          <div>
-            <label htmlFor={modeId} className={label}>
-              Workflow
-            </label>
-            <select
-              id={modeId}
-              value={mode}
-              disabled={!!unavailable || running}
-              onChange={(e) => setMode(e.target.value as AskMode)}
-              className={`${input} w-auto`}
-            >
-              {ASK_MODES.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          <label className="flex items-center gap-1 text-[11px] text-fg-muted">
-            <input
-              type="checkbox"
-              checked={useFile && !!selectedPath}
-              disabled={!selectedPath || running}
-              onChange={(e) => setUseFile(e.target.checked)}
-            />
-            Focus on{" "}
-            {selectedPath ? <span className="font-mono">{selectedPath}</span> : "a selected file"}
-          </label>
-        </div>
-        <div>
-          <label htmlFor={questionId} className={label}>
-            Your question
-          </label>
-          <textarea
-            id={questionId}
-            rows={3}
-            maxLength={4000}
-            value={question}
-            disabled={!!unavailable || running}
-            onChange={(e) => setQuestion(e.target.value)}
-            placeholder="e.g. How does an order total get calculated, and which files are involved?"
-            className={`${input} resize-y`}
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="submit"
-            disabled={!question.trim() || running || !!unavailable}
-            className={buttonClass.primary}
-          >
-            Ask
-          </button>
-          {running && (
-            <button
-              type="button"
-              className={buttonClass.secondary}
-              onClick={() => abort.current?.abort()}
-            >
-              Cancel
-            </button>
-          )}
-          <span className="text-[11px] text-fg-subtle">
-            The agent reads this upload only and never changes it.
-          </span>
-        </div>
-      </form>
-
-      {running && <Spinner text="The agent is reading the project…" />}
-      {run.state === "error" && <ErrorText text={run.message} />}
-      {run.state === "ready" && <AgentAnswer run={run.data} onOpen={onOpen} />}
-    </div>
-  );
-}
-
-function AgentAnswer({ run, onOpen }: { run: AgentRun; onOpen: OpenLocation }) {
-  const files = run.context.files_inspected;
-  return (
-    <section aria-label="Agent answer" className="space-y-2 border-t border-border pt-2 text-xs">
-      {run.error && <ErrorText text={run.error.message} />}
-      {run.answer && <div className="whitespace-pre-wrap text-fg">{run.answer}</div>}
-      {run.findings.length > 0 && (
-        <div>
-          <h4 className="font-semibold text-fg-muted">Findings ({run.findings.length})</h4>
-          <ul aria-label="Review findings" className="mt-1 space-y-1.5">
-            {run.findings.map((f) => (
-              <li key={f.id} className="rounded border border-border p-1.5">
-                <span className="mr-1 rounded border border-border px-1 text-[10px] uppercase">
-                  {f.severity}
-                </span>
-                <span className="font-medium text-fg">{f.title}</span>{" "}
-                <button
-                  type="button"
-                  className="font-mono text-accent-text hover:underline"
-                  onClick={() => onOpen(f.file_path, f.start_line)}
-                >
-                  {f.file_path}:{f.start_line}
-                </button>
-                <p className="mt-0.5 text-fg-muted">{f.explanation}</p>
-                {f.suggestion && <p className="mt-0.5 text-fg-muted">Suggestion: {f.suggestion}</p>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {files.length > 0 && (
-        <div>
-          <h4 className="font-semibold text-fg-muted">Files read ({files.length})</h4>
-          <ul aria-label="Files inspected" className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5">
-            {files.map((path) => (
-              <li key={path}>
-                <button
-                  type="button"
-                  className="font-mono text-accent-text hover:underline"
-                  onClick={() => onOpen(path, 1)}
-                >
-                  {path}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {run.warnings.length > 0 && (
-        <ul className="list-disc pl-4 text-warning">
-          {run.warnings.map((w) => (
-            <li key={w}>{w}</li>
-          ))}
-        </ul>
-      )}
-      <p className="text-[10px] text-fg-subtle">
-        {run.model ? `${run.provider ?? "AI"} · ${run.model} · ` : ""}
-        {plural(run.tool_calls.length, "tool call")} · {(run.duration_ms / 1000).toFixed(1)} s
-      </p>
-    </section>
   );
 }
 
@@ -703,7 +483,13 @@ export function UploadDetailPage({ projectId }: { projectId: string }) {
           </div>
           <div role="tabpanel" id={`${tabsId}-${tab}-panel`} aria-labelledby={`${tabsId}-${tab}`}>
             {tab === "ask" && (
-              <AskPanel projectId={data.id} selectedPath={selected} onOpen={open} />
+              <ProjectAsk
+                projectId={data.id}
+                modes={ASK_MODES}
+                selectedPath={selected}
+                onOpen={open}
+                readOnly
+              />
             )}
             {tab === "overview" && <OverviewPanel project={data} analyzing={analyzing} />}
             {tab === "impact" && (
