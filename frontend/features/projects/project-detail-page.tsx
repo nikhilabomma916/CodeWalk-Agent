@@ -331,9 +331,14 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
             <ScanSearch aria-hidden className={`size-3.5 ${analyzing ? "animate-pulse" : ""}`} />
             <span className="hidden sm:inline">{analyzing ? "Analyzing…" : "Analyze"}</span>
           </button>
-          <Link href={codingHref(project.id)} className={buttonClass.primary}>
+          <Link
+            href={
+              project.origin === "upload" ? `/app/uploads/${project.id}` : codingHref(project.id)
+            }
+            className={buttonClass.primary}
+          >
             <Code2 aria-hidden className="size-3.5" />
-            Open in Coding
+            {project.origin === "upload" ? "Open analysis" : "Open in Coding"}
           </Link>
         </>
       }
