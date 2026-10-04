@@ -70,12 +70,13 @@ class Database:
 
 class DatabaseHealthCheck:
     name = "database"
-    # The API still serves code analysis without a database, so an outage makes
-    # the service "degraded" rather than unavailable.
-    required = False
 
-    def __init__(self, database: Database | None) -> None:
+    def __init__(self, database: Database | None, *, required: bool = False) -> None:
         self._database = database
+        # Outside production the API still serves code analysis without a database, so an outage
+        # makes the service "degraded". In production sign-in and projects need it: an outage
+        # makes the service not ready (503), so health checks and the proxy stop routing to it.
+        self.required = required
 
     async def check(self) -> None:
         if self._database is None:

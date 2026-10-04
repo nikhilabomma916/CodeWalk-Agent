@@ -1,0 +1,166 @@
+# CodeWalk Agent: production-oriented stack (Module 15). See docs/deployment/production-deployment.md.
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build --wait
+#
+# Services:  db (PostgreSQL 17 + pgvector) -> migrate (one-shot: alembic upgrade head)
+#            -> backend (FastAPI) + frontend (Next.js) -> proxy (nginx, the only published service)
+# Networks:  edge (proxy, frontend, backend; has outbound access for the AI providers)
+#            data (internal: db, migrate, backend; no outbound access, nothing published)
+#
+# Configuration comes from the --env-file (never committed; template: .env.production.example).
+# Required: POSTGRES_PASSWORD and CODEWALK_SECRET_KEY. AI/retrieval keys are optional.
+# This project is separate from the development database (docker-compose.yml, project "codewalk").
+name: codewalk-prod
+
+x-backend-image: &backend-image
+  image: ${CODEWALK_IMAGE_REGISTRY:-}codewalk-backend:${CODEWALK_IMAGE_TAG:-local}
+  build:
+    context: ./backend
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+x-backend-environment: &backend-environment
+  CODEWALK_ENV: production
+  CODEWALK_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-codewalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the env file}@db:5432/${POSTGRES_DB:-codewalk}
+  CODEWALK_DATABASE_POOL_SIZE: ${CODEWALK_DATABASE_POOL_SIZE:-5}
+  CODEWALK_SECRET_KEY: ${CODEWALK_SECRET_KEY:?Set CODEWALK_SECRET_KEY (48+ random characters) in the env file}
+  # Empty = same-origin only (frontend and API behind this proxy). Set to the public https:// origin.
+  CODEWALK_CORS_ORIGINS: ${CODEWALK_PUBLIC_ORIGIN:-}
+  CODEWALK_LOG_FORMAT: ${CODEWALK_LOG_FORMAT:-json}
+  CODEWALK_LOG_LEVEL: ${CODEWALK_LOG_LEVEL:-INFO}
+  # Only the proxy can reach the backend (its port is never published), so its forwarded
+  # client address and scheme are trusted; rate limits then see real client addresses.
+  FORWARDED_ALLOW_IPS: "*"
+  CODEWALK_AI_ENABLED: ${CODEWALK_AI_ENABLED:-false}
+  CODEWALK_AI_PROVIDER: ${CODEWALK_AI_PROVIDER:-}
+  CODEWALK_AI_MODEL: ${CODEWALK_AI_MODEL:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  CODEWALK_AI_API_KEY: ${CODEWALK_AI_API_KEY:-}
+  RAG_ENABLED: ${RAG_ENABLED:-false}
+  RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-}
+  RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-}
+  VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+
+services:
+  db:
+    image: pgvector/pgvector:pg17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-codewalk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the env file}
+      POSTGRES_DB: ${POSTGRES_DB:-codewalk}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [data]
+    shm_size: 256m
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+      start_interval: 1s
+
+  # Runs once per deployment, before the API starts; a failure stops the rollout (the backend
+  # depends on its successful completion). Never runs concurrently with itself.
+  migrate:
+    <<: [*backend-image, *hardening]
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    healthcheck:
+      disable: true  # a one-shot job: compose waits for it to exit 0 instead
+    environment: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [data]
+    tmpfs: [/tmp]
+
+  backend:
+    <<: [*backend-image, *hardening]
+    restart: unless-stopped
+    init: true
+    environment: *backend-environment
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [data, edge]
+    tmpfs: [/tmp]
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=4).status == 200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
+
+  frontend:
+    <<: *hardening
+    image: ${CODEWALK_IMAGE_REGISTRY:-}codewalk-frontend:${CODEWALK_IMAGE_TAG:-local}
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    init: true
+    networks: [edge]
+    volumes:
+      - type: tmpfs
+        target: /app/.next/cache
+        tmpfs:
+          mode: 0o1777
+    tmpfs: [/tmp]
+    stop_grace_period: 20s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+      start_interval: 1s
+
+  proxy:
+    <<: *hardening
+    image: ${CODEWALK_IMAGE_REGISTRY:-}codewalk-proxy:${CODEWALK_IMAGE_TAG:-local}
+    build:
+      context: ./deploy/nginx
+    restart: unless-stopped
+    environment:
+      CODEWALK_PROXY_TLS: ${CODEWALK_PROXY_TLS:-off}
+    ports:
+      - "${CODEWALK_BIND_ADDRESS:-0.0.0.0}:${CODEWALK_HTTP_PORT:-80}:8080"
+      - "${CODEWALK_BIND_ADDRESS:-0.0.0.0}:${CODEWALK_HTTPS_PORT:-443}:8443"
+    volumes:
+      # Certificates (fullchain.pem, privkey.pem) and the ACME webroot live on the host, outside git.
+      - ${CODEWALK_TLS_DIR:-./deploy/certs}:/etc/nginx/tls:ro
+      - ${CODEWALK_ACME_DIR:-./deploy/acme}:/var/www/acme:ro
+    tmpfs:
+      - /tmp
+      - /etc/nginx/conf.d:uid=101,gid=101
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    networks: [edge]
+    stop_grace_period: 15s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+      start_interval: 1s
+
+networks:
+  edge: {}
+  data:
+    internal: true
+
+volumes:
+  db-data: {}

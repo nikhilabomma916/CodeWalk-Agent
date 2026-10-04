@@ -37,3 +37,26 @@ def test_unreachable_database_fails_safely(client_factory: Callable[[FastAPI], T
 
     analysis = client.post("/api/v1/analysis/code", json={"code": "x = 1\n", "language": "python"})
     assert analysis.status_code == 200
+
+
+def test_production_is_not_ready_without_its_database(
+    client_factory: Callable[[FastAPI], TestClient],
+) -> None:
+    """In production sign-in and projects need the database: readiness fails (503) without it."""
+    app = build_app(
+        env="production",
+        secret_key="k" * 48,
+        cors_origins=[],
+        database_url=UNREACHABLE,
+        database_connect_timeout_seconds=1,
+    )
+    client = client_factory(app)
+    assert client.get("/api/v1/health/live").status_code == 200  # the process itself is alive
+    ready = client.get("/api/v1/health/ready")
+    assert ready.status_code == 503
+    body = ready.json()
+    assert body["status"] == "unavailable"
+    database = next(check for check in body["checks"] if check["name"] == "database")
+    assert database["required"] is True
+    assert database["status"] == "fail"
+    assert "s3cr3t" not in ready.text

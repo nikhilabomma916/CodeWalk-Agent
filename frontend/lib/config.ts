@@ -7,15 +7,22 @@
 
 const DEFAULT_API_BASE_URL = "http://localhost:8000/api/v1";
 
-function parseApiBaseUrl(raw: string | undefined): string {
+/**
+ * An absolute http(s) URL (development: the backend on another port), or a same-origin path
+ * such as "/api/v1" (behind the reverse proxy, where one image serves any domain).
+ */
+export function parseApiBaseUrl(raw: string | undefined): string {
   const value = (raw ?? "").trim() || DEFAULT_API_BASE_URL;
+  if (value.startsWith("/") && !value.startsWith("//") && !/[\s\\]/.test(value)) {
+    return value.replace(/\/+$/, "");
+  }
   try {
     const url = new URL(value);
     if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("bad protocol");
     return url.toString().replace(/\/+$/, "");
   } catch {
     throw new Error(
-      `NEXT_PUBLIC_API_BASE_URL must be an absolute http(s) URL, received ${JSON.stringify(value)}`,
+      `NEXT_PUBLIC_API_BASE_URL must be an absolute http(s) URL or a path such as /api/v1, received ${JSON.stringify(value)}`,
     );
   }
 }

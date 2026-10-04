@@ -1,0 +1,6 @@
+# Ruff settings for the repository-level test suites (integration, deployment): the backend
+# configuration, with pytest-style asserts allowed.
+extend = "../backend/pyproject.toml"
+
+[lint.per-file-ignores]
+"**" = ["S101", "S105", "S106"]

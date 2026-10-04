@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { connection } from "next/server";
 import type { ReactNode } from "react";
 
 import { AuthProvider } from "@/features/auth/auth-context";
@@ -15,7 +16,10 @@ export const viewport: Viewport = {
   colorScheme: "dark",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  // Render per request: the nonce-based Content-Security-Policy (proxy.ts) needs a fresh nonce
+  // in every page, which statically prerendered HTML cannot carry.
+  await connection();
   return (
     <html lang="en" className="h-full antialiased">
       <body className="h-full overflow-hidden">

@@ -39,6 +39,8 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # A failed validation must not print the raw input: it holds the database URL and keys.
+        hide_input_in_errors=True,
     )
 
     app_name: str = "CodeWalk Agent API"
@@ -237,10 +239,10 @@ class Settings(BaseSettings):
                     "CODEWALK_SECRET_KEY must be set to a random value of at least "
                     f"{MIN_PRODUCTION_SECRET_KEY_LENGTH} characters in production"
                 )
-            if not self.cors_origins:
-                raise ValueError("CODEWALK_CORS_ORIGINS must list the frontend origin(s)")
-            # Development defaults must not carry over: production origins are explicit HTTPS origins,
-            # and the session cookie is never sent over plain HTTP.
+            # An empty list is the same-origin deployment behind the reverse proxy (frontend and API
+            # on one origin): no cross-origin access at all, and the origin check still accepts the
+            # API's own origin. Development defaults must not carry over: any listed origin is an
+            # explicit HTTPS origin, and the session cookie is never sent over plain HTTP.
             insecure = [origin for origin in self.cors_origins if not origin.startswith("https://")]
             if insecure:
                 raise ValueError(

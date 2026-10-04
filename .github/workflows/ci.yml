@@ -85,6 +85,41 @@ jobs:
       - run: npm test
       - run: npm run build
 
+  docker:
+    name: Docker (images, compose, infrastructure tests, deployment smoke test)
+    # Module 15: builds the production images, checks the compose files and images, then runs the
+    # whole stack (throwaway secrets generated here, masked, never stored), smoke-tests it through
+    # the proxy, restarts it and verifies the data persisted. No registry push, no provider keys.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.12.17"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install test dependencies
+        run: uv --directory backend sync --frozen
+      - name: Generate throwaway stack secrets
+        run: |
+          for name in POSTGRES_PASSWORD CODEWALK_SECRET_KEY; do
+            value="$(openssl rand -base64 48 | tr -d '\n/+=' | cut -c1-48)"
+            echo "::add-mask::$value"
+            echo "$name=$value" >> "$GITHUB_ENV"
+          done
+      - name: Validate compose files
+        run: |
+          docker compose -f docker-compose.prod.yml --env-file .env.production.example config -q
+          docker compose -f docker-compose.yml --profile app config -q
+      - name: Build production images
+        run: docker compose -f docker-compose.prod.yml --env-file .env.production.example build
+      - name: Infrastructure security tests
+        run: npm run test:infra
+      - name: Deployment lifecycle (start, health, smoke test, restart, persistence)
+        run: node scripts/deploy-lifecycle.mjs --no-build --remove-volume
+
   live-providers:
     name: Live provider smoke tests (opt-in)
     # Runs only on manual dispatch and only when a provider secret exists; otherwise skipped.

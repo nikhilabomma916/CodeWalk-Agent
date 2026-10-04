@@ -95,8 +95,8 @@ deterministic analysis, project intelligence, retrieval-augmented generation (RA
 
 ### Planned (future batches)
 
-Docker/deployment work (Module 14) and later modules. Account management (password change/reset,
-email verification, settings) is not implemented yet.
+Later modules. Account management (password change/reset, email verification, settings) is not
+implemented yet.
 
 ### AI assistance: enabling it
 
@@ -265,13 +265,17 @@ See [docs/architecture.md](docs/architecture.md) for the design and extension po
 │   ├── tools/               TypeScript analyzer worker (Node)
 │   └── tests/               backend unit/API tests; tests/db runs against real PostgreSQL
 ├── tests/integration/       live-stack tests (require running services)
-├── scripts/                 developer scripts (dev launcher)
-├── docker/                  PostgreSQL init scripts
+├── tests/deployment/        Module 15: infrastructure security tests and the deployment smoke test
+├── scripts/                 developer scripts: dev launcher, regression runner, deploy lifecycle, db backup/restore
+├── deploy/nginx/            reverse proxy image and configuration (deploy/certs, deploy/acme: host-only, git-ignored)
+├── docker/                  PostgreSQL init scripts, backend test image
 ├── docs/                    architecture and API documentation, plus the planning documents (below)
 ├── code_analysis/           earlier standalone Python analysis package from develop (see below)
 ├── agent/, execution/, database/   placeholder folders from develop (empty)
-├── docker-compose.yml       local PostgreSQL
-├── .env.example             documented configuration template
+├── docker-compose.yml       development: PostgreSQL (+ profile "app": backend, frontend, migrations)
+├── docker-compose.prod.yml  production stack (db, migrate, backend, frontend, proxy)
+├── .env.example             documented configuration template (development)
+├── .env.production.example  production stack template (placeholders only)
 └── package.json             root task runner
 ```
 
@@ -375,6 +379,34 @@ npm run dev:frontend     # next dev
 
 Production-style frontend: `npm run build:frontend`, then `npm --prefix frontend start`.
 
+### In Docker (development)
+
+```bash
+docker compose --profile app up -d --build   # postgres + migrations + backend (:8000) + frontend (:3000), hot reload
+docker compose --profile app stop            # data is kept; never "down -v" unless you mean to delete it
+```
+
+## Deployment (Module 15)
+
+A production-oriented Docker stack: PostgreSQL 17 + pgvector, a one-shot migration job, the FastAPI
+backend and the Next.js frontend as non-root, read-only containers, and an nginx reverse proxy
+(the only published service) with HTTPS support, request limits, timeouts and security headers
+(including a nonce-based Content-Security-Policy that keeps the Monaco editor working).
+
+```bash
+cp .env.production.example .env.production   # set POSTGRES_PASSWORD and CODEWALK_SECRET_KEY (never commit it)
+docker compose -f docker-compose.prod.yml --env-file .env.production config -q
+docker compose -f docker-compose.prod.yml --env-file .env.production build
+docker compose -f docker-compose.prod.yml --env-file .env.production run --rm migrate
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d --wait
+npm run db:backup -- --project codewalk-prod --service db   # pg_dump to backups/ (git-ignored), verified
+npm run db:restore -- --file backups/<file>.dump           # verify a backup in a disposable container
+```
+
+AI and semantic-search keys are optional and backend-only. Documentation: [docs/deployment/](docs/deployment/)
+(architecture, local Docker, production deployment, environment, secrets, backup/restore, reverse
+proxy and HTTPS, troubleshooting, rollback, checklist, runbook, start-up measurements).
+
 ## Testing and quality
 
 ```bash
@@ -403,6 +435,9 @@ npm run test:security       # auth, ownership, paths, secret files, agent tools,
 npm run test:integration    # live stack (requires `npm run dev`); 12 tests incl. cross-user isolation
 npm run test:perf -- --api http://127.0.0.1:8000/api/v1                # performance, live HTTP (Part A)
 npm run test:perf -- --api http://127.0.0.1:8000/api/v1 --in-process   # + Part B (needs CODEWALK_TEST_DATABASE_URL)
+npm run test:infra          # Module 15: compose/image/Dockerfile/nginx security checks (needs Docker; build images first)
+npm run test:deploy         # Module 15: production stack lifecycle: build, health, smoke test, restart, persistence, timings
+CODEWALK_SMOKE_URL=http://127.0.0.1:8080 npm run test:smoke   # smoke test against any running deployment
 ```
 
 Migrations: `uv --directory backend run alembic upgrade head` and `alembic check` (both run inside
