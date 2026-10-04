@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import audit
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
+from app.core.metrics import METRICS
 from app.core.rate_limit import AttemptLimiter
 from app.db.models import (
     ActivityType,
@@ -206,7 +207,11 @@ class AgentService:
             raise AgentRunLimitError(retry_after)
         project, index = self.search.project_index(request.project_id)  # 404 for other users' projects
         self._validate(request, index)
-        self.limiter.record_failure(key)  # every accepted run counts toward the limit
+        # Every accepted run counts toward the limit. Checked again atomically here: simultaneous
+        # requests may all have passed the early check above before any of them was recorded.
+        if (retry_after := self.limiter.acquire(key)) is not None:
+            audit("rate_limited", level=logging.WARNING, scope="agent", user=self.owner.id)
+            raise AgentRunLimitError(retry_after)
 
         started = time.perf_counter()
         deadline = started + self.settings.agent_timeout_seconds
@@ -328,6 +333,7 @@ class AgentService:
         run.warnings = warnings
         run.duration_ms = round((time.perf_counter() - started) * 1000)
         run.completed_at = _now()
+        METRICS.observe("agent_run", time.perf_counter() - started, status.value)
         ActivityRecorder(self.session, self.owner).record(
             ActivityType.AGENT_RUN,
             project,

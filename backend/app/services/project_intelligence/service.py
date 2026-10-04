@@ -50,6 +50,27 @@ from app.services.projects import ProjectService
 MAX_STORED_ERRORS = 200
 
 
+def stored_structure(record: ProjectFile, language: Language) -> FileStructure:
+    """The file's structure from the per-file cache (``files.structure``, keyed by content hash),
+    extracted and written back to the record when missing or stale (the caller commits)."""
+    cached = record.structure
+    if (
+        cached is not None
+        and cached.get("version") == STRUCTURE_VERSION
+        and cached.get("content_hash") == record.content_hash
+    ):
+        return FileStructure.model_validate(cached["data"])
+    structure = extract_structure(
+        SourceFile(path=record.path, size=record.size, content=record.content), language
+    )
+    record.structure = {
+        "version": STRUCTURE_VERSION,
+        "content_hash": record.content_hash,
+        "data": structure.model_dump(mode="json"),
+    }
+    return structure
+
+
 class ProjectIntelligenceService:
     def __init__(self, session: Session, settings: Settings, owner: User) -> None:
         self.session = session
@@ -124,12 +145,6 @@ class ProjectIntelligenceService:
         result.analyzed_at = analysis.created_at.astimezone(UTC)
         return result
 
-    def structure_of(self, project: Project, records: Sequence[ProjectFile]) -> ProjectAnalysisResult:
-        """Files, symbols, imports and relationships of stored files, without scanning or recording
-        an analysis. Per-file structure comes from the content-hash cache; structures computed for
-        changed files are written back to it (the caller commits)."""
-        return self._build(project, records, None, 0)
-
     def _build(
         self,
         project: Project,
@@ -140,21 +155,7 @@ class ProjectIntelligenceService:
         by_path = {record.path: record for record in records}
 
         def cached_structure(file: SourceFile, language: Language) -> FileStructure:
-            record = by_path[file.path]
-            cached = record.structure
-            if (
-                cached is not None
-                and cached.get("version") == STRUCTURE_VERSION
-                and cached.get("content_hash") == record.content_hash
-            ):
-                return FileStructure.model_validate(cached["data"])
-            structure = extract_structure(file, language)
-            record.structure = {
-                "version": STRUCTURE_VERSION,
-                "content_hash": record.content_hash,
-                "data": structure.model_dump(mode="json"),
-            }
-            return structure
+            return stored_structure(by_path[file.path], language)
 
         files = [
             SourceFile(
@@ -175,25 +176,28 @@ class ProjectIntelligenceService:
 
     def _sync(self, project: Project, scan: ScanResult) -> SyncSummary:
         existing = {record.path: record for record in self.files.list_all(project.id)}
-        created = updated = unchanged = 0
+        updated = unchanged = 0
+        new_records: list[ProjectFile] = []
         seen: set[str] = set()
         for file in scan.files:
             seen.add(file.path)
             values = file_values(file.path, file.content, file.size)
             record = existing.get(file.path)
             if record is None:
-                record = self.files.create(project_id=project.id, **values)
-                self._record_version(record)
-                created += 1
+                new_records.append(self.files.add(project_id=project.id, **values))
             elif record.content_hash != values["content_hash"] or record.size != values["size"]:
                 self.files.update(record, **values)
                 self._record_version(record)
                 updated += 1
             else:
                 unchanged += 1
+        # New files and their first versions are inserted in batches (one flush), not one by one.
+        self.versions.add_initial(new_records, source=FileVersionSource.SCAN, author_id=None)
         removed = [path for path in existing if path not in seen]
         self.files.delete_paths(project.id, removed)
-        return SyncSummary(created=created, updated=updated, deleted=len(removed), unchanged=unchanged)
+        return SyncSummary(
+            created=len(new_records), updated=updated, deleted=len(removed), unchanged=unchanged
+        )
 
     def _record_version(self, record: ProjectFile) -> None:
         """Changes found by a rescan become versions too (no author: they come from disk)."""

@@ -1,9 +1,10 @@
 """Approving or rejecting an agent's proposed change: the only path from a proposal to a file write.
 
 Approval re-checks everything at decision time, never trusting the proposal or the client:
-1. the action belongs to the signed-in user and is still pending;
+1. the action belongs to the signed-in user and is still pending (its row is locked);
 2. its project is the user's and is editable (not folder-linked);
-3. the file still exists at the same path;
+3. the file still exists at the same path (its row is locked, so concurrent approvals of different
+   proposals for one file cannot both apply against the same original content);
 4. the file's content hash equals the hash the proposal was computed against, and every
    change's original text is still exactly at its range (otherwise: ``stale``, not applied);
 5. the result is bounded (size, changed lines).
@@ -94,7 +95,9 @@ class AgentActionService:
         project = self.projects.get(action.project_id)
         if project.root_path is not None:
             raise ProjectReadOnlyError()
-        record = FileRepository(self.session).get(project.id, action.file_id)
+        # Lock the file too: two different proposals for the same file, approved at the same time, are
+        # then decided one after the other, and the second sees the first one's content (stale).
+        record = FileRepository(self.session).get(project.id, action.file_id, for_update=True)
         if record is None:
             raise self._stale(action, "file_missing", "The file no longer exists.")
         if record.path != action.file_path:

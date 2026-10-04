@@ -22,6 +22,8 @@ Three places hold configuration, with different rules:
 | `CODEWALK_ACME_DIR` | no | `./deploy/acme` | ACME HTTP-01 webroot, mounted read-only |
 | `POSTGRES_USER` / `POSTGRES_DB` | no | `codewalk` | database role and name |
 | `CODEWALK_DATABASE_POOL_SIZE` | no | `5` | connections per pool (up to twice this under load) |
+| `CODEWALK_DATABASE_STATEMENT_TIMEOUT_SECONDS` | no | `30` | PostgreSQL cancels a single application statement after this long (the request fails with 503); migrations are not affected |
+| `CODEWALK_METRICS_ENABLED` | no | `true` | backend `GET /metrics` (Prometheus text) on the internal network; not routed by the proxy. See docs/operations/observability.md |
 | `CODEWALK_IMAGE_REGISTRY` / `CODEWALK_IMAGE_TAG` | no | empty / `local` | which images run; a rollback changes the tag |
 | `CODEWALK_LOG_FORMAT` / `CODEWALK_LOG_LEVEL` | no | `json` / `INFO` | backend logging |
 | `CODEWALK_AI_ENABLED`, `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | no | `false`, provider defaults | AI assistance and the agent |
@@ -72,4 +74,5 @@ never reach the frontend image (`npm run test:infra` scans the built bundle).
 | Agent run | 240 s, 8 steps, 3 proposed changes | `CODEWALK_AGENT_*`; proxy read timeout 300 s |
 | Analyzer per file | 10 s | `CODEWALK_ANALYSIS_TIMEOUT_SECONDS` |
 | Database connect | 5 s | `CODEWALK_DATABASE_CONNECT_TIMEOUT_SECONDS` |
+| One SQL statement | 30 s | `CODEWALK_DATABASE_STATEMENT_TIMEOUT_SECONDS` |
 | Rate limits | login 10/15 min, register 20/h, AI 30/10 min, agent 20/10 min, per process | `CODEWALK_*_MAX_*` |

@@ -26,6 +26,9 @@ x-backend-environment: &backend-environment
   CODEWALK_ENV: production
   CODEWALK_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-codewalk}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the env file}@db:5432/${POSTGRES_DB:-codewalk}
   CODEWALK_DATABASE_POOL_SIZE: ${CODEWALK_DATABASE_POOL_SIZE:-5}
+  CODEWALK_DATABASE_STATEMENT_TIMEOUT_SECONDS: ${CODEWALK_DATABASE_STATEMENT_TIMEOUT_SECONDS:-30}
+  # GET /metrics on the backend's own network only (the proxy routes /api/ alone).
+  CODEWALK_METRICS_ENABLED: ${CODEWALK_METRICS_ENABLED:-true}
   CODEWALK_SECRET_KEY: ${CODEWALK_SECRET_KEY:?Set CODEWALK_SECRET_KEY (48+ random characters) in the env file}
   # Empty = same-origin only (frontend and API behind this proxy). Set to the public https:// origin.
   CODEWALK_CORS_ORIGINS: ${CODEWALK_PUBLIC_ORIGIN:-}

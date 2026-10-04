@@ -1,7 +1,7 @@
 "use client";
 
 import { ChevronDown, ChevronRight, ChevronsDownUp, FilePlus } from "lucide-react";
-import { memo, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { StateMessage } from "@/components/ui/state-message";
@@ -100,18 +100,25 @@ export function ProjectExplorer() {
 
   const visible = useMemo(() => (tree ? flattenVisible(tree, expanded) : []), [tree, expanded]);
 
-  const toggleFolder = (path: string, open?: boolean) =>
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (open ?? !next.has(path)) next.add(path);
-      else next.delete(path);
-      return next;
-    });
+  const toggleFolder = useCallback(
+    (path: string, open?: boolean) =>
+      setExpanded((current) => {
+        const next = new Set(current);
+        if (open ?? !next.has(path)) next.add(path);
+        else next.delete(path);
+        return next;
+      }),
+    [],
+  );
 
-  const activate = (node: ProjectTreeNode) => {
-    if (node.type === "folder") toggleFolder(node.path);
-    else void actions.openFile(node.path);
-  };
+  // Stable across renders so memoized rows are not all re-rendered on every keystroke in the editor.
+  const activate = useCallback(
+    (node: ProjectTreeNode) => {
+      if (node.type === "folder") toggleFolder(node.path);
+      else void actions.openFile(node.path);
+    },
+    [actions, toggleFolder],
+  );
 
   const focusRow = (path: string) => {
     setFocusedPath(path);
