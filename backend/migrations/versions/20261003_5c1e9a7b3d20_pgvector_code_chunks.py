@@ -51,7 +51,10 @@ def upgrade() -> None:
             ["file_id"], ["files.id"], name=op.f("fk_code_chunks_file_id_files"), ondelete="CASCADE"
         ),
         sa.ForeignKeyConstraint(
-            ["project_id"], ["projects.id"], name=op.f("fk_code_chunks_project_id_projects"), ondelete="CASCADE"
+            ["project_id"],
+            ["projects.id"],
+            name=op.f("fk_code_chunks_project_id_projects"),
+            ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_code_chunks")),
         sa.UniqueConstraint(

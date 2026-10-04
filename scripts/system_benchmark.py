@@ -410,6 +410,64 @@ def main() -> None:
                 agent_t.append(t)
                 agent_q.append(q)
             row["agent_run_3_tools"] = {**summarize(agent_t), "sql_statements": statistics.median(agent_q)}
+
+            # Module 17: deterministic insights (skipped on servers that do not have them).
+            target = f"pkg/mod{size // 2}.py"
+            symbol = f"func_{size // 2}_0"
+            probe = c.get(f"{API}/projects/{pid}/architecture")
+            if probe.status_code == 200:
+                _, row["architecture"] = repeated(lambda: ok(c.get(f"{API}/projects/{pid}/architecture")))
+                impact, row["impact_analysis"] = repeated(
+                    lambda: ok(
+                        c.post(f"{API}/projects/{pid}/impact", json={"file_path": target, "symbol": symbol})
+                    )
+                )
+                body = impact.json()
+                row["impact_analysis"]["result"] = {
+                    "direct": len(body["direct_dependents"]),
+                    "indirect": len(body["indirect_dependents"]),
+                    "possible": len(body["possible_references"]),
+                }
+                _, row["references"] = repeated(
+                    lambda: ok(c.post(f"{API}/projects/{pid}/references", json={"name": symbol}))
+                )
+                review_t, prompt_chars = [], []
+                finding = {
+                    "severity": "low",
+                    "category": "maintainability",
+                    "title": "Magic number",
+                    "file_path": target,
+                    "start_line": 3,
+                    "explanation": "x",
+                    "evidence": "total = value + 0",
+                    "confidence": "low",
+                }
+                for _ in range(5):
+                    app.state.ai_service = AIService(
+                        make_settings(**limits),
+                        provider=StubProvider(
+                            answers=[
+                                _tool("analyze_impact", file_path=target, symbol=symbol),
+                                _tool("get_file_content", file_path=target),
+                                _tool("record_finding", **finding),
+                                agent_steps([])[-1],
+                            ]
+                        ),
+                    )
+                    run, t = timed(
+                        lambda: ok(
+                            c.post(
+                                f"{API}/agent/run",
+                                json={"project_id": pid, "message": "review", "mode": "review"},
+                            )
+                        )
+                    )
+                    review_t.append(t)
+                    prompt_chars.append(run.json()["usage"]["largest_prompt_chars"])
+                row["agent_review_3_tools"] = {
+                    **summarize(review_t),
+                    "largest_prompt_chars_median": statistics.median(prompt_chars),
+                }
             row["memory_after"] = rss_mb()
             report["projects"].append(row)
             print(json.dumps(row), flush=True)
@@ -495,6 +553,16 @@ def main() -> None:
     print(text)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
+
+
+def _tool(name: str, **arguments: Any) -> dict[str, Any]:
+    return {
+        "status_message": "Working",
+        "action": "call_tool",
+        "tool": name,
+        "arguments_json": json.dumps(arguments),
+        "answer": None,
+    }
 
 
 def large_history(c: Any, engine: Any, ok: Any, counted: Any, rows: int) -> dict[str, Any]:

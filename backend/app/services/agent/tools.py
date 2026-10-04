@@ -13,10 +13,12 @@ proposal; applying one is a separate, explicitly approved request.
 
 from __future__ import annotations
 
+import re
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
@@ -29,18 +31,23 @@ from app.schemas.agent import AgentRunRequest, ProposedChange, ToolPermission
 from app.schemas.ai import CodeEdit, DiagnosticInput
 from app.schemas.common import ProjectFilePath
 from app.schemas.search import MatchType, SearchFilters, SearchMode, SearchRequest
+from app.services import insights
 from app.services.ai import edits as edit_rules
 from app.services.ai.outputs import ModelLineEdit
 from app.services.analysis.engine import AnalysisEngine
 from app.services.project_intelligence.models import SymbolKind
+from app.services.project_intelligence.scanner import is_secret_path
 from app.services.project_search.context import ProjectContextBuilder, containing_symbol
-from app.services.project_search.index import IndexedFile, ProjectIndex
+from app.services.project_search.index import IndexedFile, ProjectIndex, is_searchable
 from app.services.project_search.service import ProjectSearchService, make_snippet
 
 MAX_FILE_LINES = 200  # get_file_content
 MAX_LINE_CHARS = 400
 MAX_RESULTS = 10
 MAX_DIAGNOSTICS = 50
+MAX_FINDINGS = 20
+MAX_PROPOSAL_FILES = 10
+MAX_NEW_FILE_CHARS = 100_000
 _path_adapter: TypeAdapter[str] = TypeAdapter(ProjectFilePath)
 
 
@@ -73,6 +80,9 @@ class ToolContext:
     request: AgentRunRequest
     run_id: Any
     actions: list[AgentAction] = field(default_factory=list)
+    # Module 17: files the agent actually looked at (shown to the developer), and review findings.
+    inspected: list[str] = field(default_factory=list)
+    findings: list[dict[str, Any]] = field(default_factory=list)
 
     # --- shared helpers -------------------------------------------------------------------
 
@@ -87,6 +97,8 @@ class ToolContext:
             raise ToolError(
                 f"{path} is not a file of this project (or it cannot be read).", code="file_not_found"
             )
+        if path not in self.inspected:
+            self.inspected.append(path)
         return indexed
 
     def lines_of(self, file: IndexedFile) -> list[str]:
@@ -233,6 +245,38 @@ class FixArgs(_Args):
     summary: str = Field(min_length=1, max_length=300)
     explanation: str = Field(min_length=1, max_length=4000)
     edits: list[ModelLineEdit] = Field(min_length=1, max_length=edit_rules.MAX_EDITS)
+    confidence: Literal["low", "medium", "high"] | None = None
+    risk: Literal["low", "medium", "high"] | None = None
+
+
+class FileEdits(_Args):
+    file_path: str = Field(max_length=1024)
+    edits: list[ModelLineEdit] = Field(min_length=1, max_length=edit_rules.MAX_EDITS)
+
+
+class ChangesArgs(_Args):
+    summary: str = Field(min_length=1, max_length=300)
+    explanation: str = Field(min_length=1, max_length=4000)
+    files: list[FileEdits] = Field(min_length=1, max_length=10)
+    confidence: Literal["low", "medium", "high"] | None = None
+    risk: Literal["low", "medium", "high"] | None = None
+
+
+class NewFileArgs(_Args):
+    file_path: str = Field(max_length=1024)
+    content: str = Field(min_length=1, max_length=100_000)
+    summary: str = Field(min_length=1, max_length=300)
+    explanation: str = Field(min_length=1, max_length=4000)
+    confidence: Literal["low", "medium", "high"] | None = None
+
+
+class ChangesOut(BaseModel):
+    group_id: str
+    action_ids: list[str]
+    files: list[str]
+    changed_lines: int
+    status: str
+    note: str
 
 
 class FixOut(BaseModel):
@@ -465,6 +509,154 @@ def explain_error(ctx: ToolContext, args: ExplainArgs) -> tuple[ExplainOut, str]
     return out, f"Collected evidence for “{diagnostic.message[:80]}” and {len(related)} related snippet(s)"
 
 
+# --- Module 17: architecture, impact, references, tests, review findings ----------------------
+
+
+class ImpactArgs(_Args):
+    file_path: str = Field(max_length=1024)
+    symbol: str | None = Field(default=None, max_length=200)
+
+
+class NameArgs(_Args):
+    name: str = Field(min_length=1, max_length=200)
+
+
+class TestsOut(BaseModel):
+    file_path: str
+    tests: list[insights.Location]
+
+
+Confidence = Literal["low", "medium", "high"]
+Severity = Literal["info", "low", "medium", "high", "critical"]
+FindingCategory = Literal[
+    "correctness",
+    "bug",
+    "security",
+    "performance",
+    "maintainability",
+    "architecture",
+    "error_handling",
+    "concurrency",
+    "testing",
+    "accessibility",
+    "api_contract",
+    "database",
+]
+
+
+class FindingArgs(_Args):
+    severity: Severity
+    category: FindingCategory
+    title: str = Field(min_length=3, max_length=120)
+    file_path: str = Field(max_length=1024)
+    start_line: int = Field(ge=1)
+    end_line: int | None = Field(default=None, ge=1)
+    explanation: str = Field(min_length=1, max_length=1000)
+    evidence: str = Field(min_length=1, max_length=600, description="What in the code shows this.")
+    suggestion: str = Field(default="", max_length=600)
+    confidence: Confidence
+
+
+class FindingOut(BaseModel):
+    finding_id: str
+    recorded: int
+    note: str
+
+
+def _symbol_name(name: str | None) -> str | None:
+    if name is None:
+        return None
+    if not re.fullmatch(r"[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*", name):
+        raise ToolError(
+            "symbol must be an identifier such as login or AuthService.verify.", code="invalid_symbol"
+        )
+    return name
+
+
+def get_architecture(ctx: ToolContext, _: NoArgs) -> tuple[insights.ArchitectureReport, str]:
+    report = insights.architecture(ctx.index)
+    # Keep the tool result compact: the model sees the biggest parts of each list.
+    report = report.model_copy(
+        update={
+            "components": report.components[:15],
+            "links": report.links[:25],
+            "api_routes": report.api_routes[:30],
+            "data_models": report.data_models[:30],
+            "entry_points": report.entry_points[:15],
+        }
+    )
+    return (
+        report,
+        f"Summarized the architecture: {len(report.components)} component(s), {report.files} file(s)",
+    )
+
+
+def analyze_impact(ctx: ToolContext, args: ImpactArgs) -> tuple[insights.ImpactReport, str]:
+    file = ctx.file(args.file_path)
+    report = insights.impact(ctx.index, file.path, _symbol_name(args.symbol))
+    affected = len(report.direct_dependents) + len(report.indirect_dependents)
+    target = f"{args.symbol} in {file.path}" if args.symbol else file.path
+    return report, (
+        f"Impact of changing {target}: {affected} dependent file(s), "
+        f"{len(report.possible_references)} possible reference(s), "
+        f"{len(report.related_tests)} related test(s)"
+    )
+
+
+def find_references(ctx: ToolContext, args: NameArgs) -> tuple[insights.ReferenceReport, str]:
+    report = insights.references(ctx.index, _symbol_name(args.name) or args.name)
+    return (
+        report,
+        f"Found {len(report.definitions)} definition(s) and {len(report.references)} referencing file(s)",
+    )
+
+
+def find_related_tests(ctx: ToolContext, args: FileArgs) -> tuple[TestsOut, str]:
+    file = ctx.file(args.file_path)
+    tests = insights.related_tests(ctx.index, file.path)
+    return TestsOut(file_path=file.path, tests=tests), f"Found {len(tests)} related test file(s)"
+
+
+def record_finding(ctx: ToolContext, args: FindingArgs) -> tuple[FindingOut, str]:
+    """Add a review finding to this run's report, after checking it points at real project lines."""
+    if len(ctx.findings) >= MAX_FINDINGS:
+        raise ToolError(
+            f"At most {MAX_FINDINGS} findings can be recorded in one request.", code="finding_limit"
+        )
+    file = ctx.file(args.file_path)
+    lines = ctx.lines_of(file)
+    end = args.end_line or args.start_line
+    if end < args.start_line or end > max(len(lines), 1):
+        raise ToolError(
+            f"Lines {args.start_line}-{end} are outside {file.path} ({len(lines)} lines).",
+            code="invalid_range",
+        )
+    finding: dict[str, Any] = {
+        "id": f"F{len(ctx.findings) + 1}",
+        "severity": args.severity,
+        "category": args.category,
+        "title": args.title.strip(),
+        "file_path": file.path,
+        "start_line": args.start_line,
+        "end_line": end,
+        "explanation": args.explanation.strip(),
+        "evidence": args.evidence.strip(),
+        "suggestion": args.suggestion.strip(),
+        "confidence": args.confidence,
+        "excerpt": [_clip(line) for line in lines[args.start_line - 1 : min(end, args.start_line + 5)]],
+    }
+    ctx.findings.append(finding)
+    return (
+        FindingOut(
+            finding_id=finding["id"],
+            recorded=len(ctx.findings),
+            note="Recorded in the review report. Nothing was changed.",
+        ),
+        f"Recorded a {args.severity} {args.category.replace('_', ' ')} finding "
+        f"in {file.path}:{args.start_line}",
+    )
+
+
 def propose_fix(ctx: ToolContext, args: FixArgs) -> tuple[FixOut, str]:
     """Validate line edits against the SAVED file and store them as a pending proposal."""
     file = ctx.file(args.file_path)
@@ -496,6 +688,10 @@ def propose_fix(ctx: ToolContext, args: FixArgs) -> tuple[FixOut, str]:
         project_id=ctx.project.id,
         file_id=record.id,
         file_path=file.path,
+        kind="code_change",
+        group_id=uuid.uuid4(),
+        confidence=args.confidence,
+        risk=args.risk,
         status=AgentActionStatus.PENDING,
         summary=args.summary.strip(),
         explanation=args.explanation.strip(),
@@ -517,6 +713,158 @@ def propose_fix(ctx: ToolContext, args: FixArgs) -> tuple[FixOut, str]:
             action_id=str(action.id), file_path=file.path, changed_lines=changed, status="pending", note=note
         ),
         f"Proposed a change to {file.path} ({changed} changed line(s)); waiting for your review",
+    )
+
+
+def _validated_change(
+    ctx: ToolContext, raw_path: str, edits: list[ModelLineEdit]
+) -> tuple[ProjectFile, str, str, list[CodeEdit]]:
+    """(stored file, original, changed content, edits) for whole-line edits of one saved file."""
+    file = ctx.file(raw_path)
+    record = ctx.stored(file)
+    base = record.content or ""
+    if len(base) > 100_000:
+        raise ToolError(
+            f"{file.path}: changes can only be proposed for files under 100,000 characters.",
+            code="file_too_large",
+        )
+    try:
+        code_edits = edit_rules.validate_edits(
+            file.path, base, edit_rules.line_edits_to_code_edits(file.path, base, edits)
+        )
+        suggested = edit_rules.apply_edits(base, code_edits)
+        edit_rules.check_change_is_safe(base, suggested)
+    except edit_rules.InvalidEditError as exc:
+        raise ToolError(
+            f"{file.path}: the proposed edits are invalid: {exc.message}", code="invalid_edit"
+        ) from None
+    if suggested == base:
+        raise ToolError(f"{file.path}: the proposed edits do not change the file.", code="no_change")
+    return record, base, suggested, code_edits
+
+
+def _changed_lines(diff: str) -> int:
+    return sum(1 for line in diff.splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---")))
+
+
+def propose_changes(ctx: ToolContext, args: ChangesArgs) -> tuple[ChangesOut, str]:
+    """A coordinated change to several saved files (e.g. a rename). Every file is validated before
+    anything is stored; the proposals share one group and are approved or rejected together."""
+    if ctx.project.root_path is not None:
+        raise ToolError(
+            "This project is linked to a server folder and cannot be edited.", code="project_read_only"
+        )
+    paths = [f.file_path for f in args.files]
+    if len(set(paths)) != len(paths):
+        raise ToolError("Each file may appear only once; put all its edits together.", code="duplicate_file")
+    validated = [(_validated_change(ctx, f.file_path, f.edits)) for f in args.files]
+    group_id = uuid.uuid4()
+    actions: list[AgentAction] = []
+    changed = 0
+    for record, base, suggested, code_edits in validated:
+        diff = edit_rules.unified_diff(record.path, base, suggested)
+        changed += _changed_lines(diff)
+        action = AgentAction(
+            run_id=ctx.run_id,
+            user_id=ctx.owner.id,
+            project_id=ctx.project.id,
+            file_id=record.id,
+            file_path=record.path,
+            kind="code_change",
+            group_id=group_id,
+            confidence=args.confidence,
+            risk=args.risk,
+            status=AgentActionStatus.PENDING,
+            summary=args.summary.strip(),
+            explanation=args.explanation.strip(),
+            changes=[_with_original(base, e).model_dump() for e in code_edits],
+            diff=diff,
+            base_content_hash=edit_rules.text_hash(base),
+            result={},
+        )
+        ctx.session.add(action)
+        actions.append(action)
+    ctx.session.flush()
+    ctx.actions.extend(actions)
+    return (
+        ChangesOut(
+            group_id=str(group_id),
+            action_ids=[str(a.id) for a in actions],
+            files=[a.file_path for a in actions],
+            changed_lines=changed,
+            status="pending",
+            note="Stored as ONE proposal covering every file; nothing was changed. The developer approves or "
+            "rejects all files together.",
+        ),
+        f"Proposed a change to {len(actions)} file(s) ({changed} changed line(s)); waiting for your review",
+    )
+
+
+def propose_new_file(ctx: ToolContext, args: NewFileArgs) -> tuple[ChangesOut, str]:
+    """A new project file (e.g. tests or documentation) for the developer to review; nothing is written."""
+    if ctx.project.root_path is not None:
+        raise ToolError(
+            "This project is linked to a server folder and cannot be edited.", code="project_read_only"
+        )
+    try:
+        path = _path_adapter.validate_python(args.file_path)
+    except ValidationError:
+        raise ToolError(
+            f"{args.file_path!r} is not a valid project file path.", code="invalid_path"
+        ) from None
+    if not is_searchable(path) or is_secret_path(path):
+        raise ToolError(
+            f"{path} is inside an ignored folder or is a credentials file; it cannot be proposed.",
+            code="path_not_allowed",
+        )
+    if path in ctx.index.files or FileRepository(ctx.session).get_by_path(ctx.project.id, path) is not None:
+        raise ToolError(f"{path} already exists; propose edits to it instead.", code="file_exists")
+    content = args.content if args.content.endswith("\n") else args.content + "\n"
+    if len(content.encode("utf-8")) > ctx.settings.max_source_bytes:
+        raise ToolError("The new file is larger than the source size limit.", code="file_too_large")
+    diff = edit_rules.unified_diff(path, "", content)
+    lines = content.count("\n")
+    action = AgentAction(
+        run_id=ctx.run_id,
+        user_id=ctx.owner.id,
+        project_id=ctx.project.id,
+        file_id=None,
+        file_path=path,
+        kind="create_file",
+        group_id=uuid.uuid4(),
+        confidence=args.confidence,
+        status=AgentActionStatus.PENDING,
+        summary=args.summary.strip(),
+        explanation=args.explanation.strip(),
+        changes=[
+            ProposedChange(
+                file_path=path,
+                start_line=1,
+                start_column=1,
+                end_line=1,
+                end_column=1,
+                original_text="",
+                replacement_text=content,
+            ).model_dump()
+        ],
+        diff=diff,
+        base_content_hash=edit_rules.text_hash(""),
+        result={},
+    )
+    ctx.session.add(action)
+    ctx.session.flush()
+    ctx.actions.append(action)
+    return (
+        ChangesOut(
+            group_id=str(action.group_id),
+            action_ids=[str(action.id)],
+            files=[path],
+            changed_lines=lines,
+            status="pending",
+            note="Stored as a proposal for a NEW file; nothing was written. The developer reviews it and may "
+            "create it or reject it.",
+        ),
+        f"Proposed a new file {path} ({lines} line(s)); waiting for your review",
     )
 
 
@@ -646,6 +994,59 @@ TOOLS: dict[str, ToolSpec] = {
             progress="Analyzing the problem…",
         ),
         ToolSpec(
+            "get_architecture",
+            "Deterministic architecture summary of the project: components (top folders), file roles, import "
+            "links between components, entry points, HTTP routes, database models.",
+            ToolPermission.READ_ONLY,
+            NoArgs,
+            insights.ArchitectureReport,
+            get_architecture,
+            max_output_chars=12000,
+            progress="Summarizing the project architecture…",
+        ),
+        ToolSpec(
+            "analyze_impact",
+            "What may break if a file (or one symbol in it) changes: dependents through resolved imports "
+            "(confirmed), name-only matches (possible), related tests and HTTP routes. No call graph.",
+            ToolPermission.READ_ONLY,
+            ImpactArgs,
+            insights.ImpactReport,
+            analyze_impact,
+            max_output_chars=12000,
+            progress="Analyzing the impact of a change…",
+        ),
+        ToolSpec(
+            "find_references",
+            "Definitions of a name and the files that use it, labelled confirmed (connected by an import) or "
+            "possible (same name only).",
+            ToolPermission.READ_ONLY,
+            NameArgs,
+            insights.ReferenceReport,
+            find_references,
+            progress="Finding references…",
+        ),
+        ToolSpec(
+            "find_related_tests",
+            "Test files that import a file (confirmed) or are named after it (possible). Read them to learn "
+            "the project's test framework, fixtures, and conventions before proposing tests.",
+            ToolPermission.READ_ONLY,
+            FileArgs,
+            TestsOut,
+            find_related_tests,
+            progress="Looking for related tests…",
+        ),
+        ToolSpec(
+            "record_finding",
+            f"Record one code-review finding in this run's report (at most {MAX_FINDINGS}). It must point at "
+            "real lines you have read, quote the evidence, and state your confidence. Does not change files. "
+            "Report only issues the code shows; do not present speculation as fact.",
+            ToolPermission.READ_ONLY,
+            FindingArgs,
+            FindingOut,
+            record_finding,
+            progress="Recording a review finding…",
+        ),
+        ToolSpec(
             "propose_fix",
             "Propose a change to ONE saved project file as whole-line edits "
             "(start_line..end_line replaced by "
@@ -656,6 +1057,28 @@ TOOLS: dict[str, ToolSpec] = {
             FixOut,
             propose_fix,
             progress="Preparing a proposed change…",
+        ),
+        ToolSpec(
+            "propose_changes",
+            f"Propose ONE coordinated change across up to {MAX_PROPOSAL_FILES} saved files (e.g. a rename "
+            "or a refactoring), each as whole-line edits like propose_fix. All files are validated first; "
+            "the developer approves or rejects them together. Use analyze_impact first to find every "
+            "affected file.",
+            ToolPermission.PROPOSED_CHANGE,
+            ChangesArgs,
+            ChangesOut,
+            propose_changes,
+            progress="Preparing a multi-file change…",
+        ),
+        ToolSpec(
+            "propose_new_file",
+            "Propose a NEW project file (tests, documentation) with its full content. It is stored for "
+            "review and NOT written. Match the project's existing conventions (read similar files first).",
+            ToolPermission.PROPOSED_CHANGE,
+            NewFileArgs,
+            ChangesOut,
+            propose_new_file,
+            progress="Preparing a new file…",
         ),
     )
 }

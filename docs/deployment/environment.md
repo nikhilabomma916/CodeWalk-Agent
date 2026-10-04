@@ -28,6 +28,7 @@ Three places hold configuration, with different rules:
 | `CODEWALK_LOG_FORMAT` / `CODEWALK_LOG_LEVEL` | no | `json` / `INFO` | backend logging |
 | `CODEWALK_AI_ENABLED`, `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | no | `false`, provider defaults | AI assistance and the agent |
 | `ANTHROPIC_API_KEY` or `CODEWALK_AI_API_KEY` | no | empty | AI provider key (backend only) |
+| `OPENAI_API_KEY`, `CODEWALK_AI_BASE_URL` | no | empty | experimental `openai` provider key and optional compatible server (https only) |
 | `RAG_ENABLED`, `RAG_EMBEDDING_PROVIDER`, `RAG_EMBEDDING_MODEL` | no | `false`, provider defaults | semantic retrieval |
 | `VOYAGE_API_KEY` | no | empty | embedding provider key (backend only) |
 

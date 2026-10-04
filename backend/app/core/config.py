@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     # Provider credential. CODEWALK_AI_API_KEY wins; otherwise ANTHROPIC_API_KEY is used.
     ai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
+    # Module 17 (experimental): CODEWALK_AI_PROVIDER=openai talks to an OpenAI-compatible API.
+    openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    ai_base_url: str | None = None  # OpenAI-compatible server; https only (http for localhost)
     ai_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
     ai_max_tokens: int = Field(default=16_000, ge=256, le=64_000)
     # Reasoning effort sent to providers that support it.
@@ -113,6 +116,9 @@ class Settings(BaseSettings):
     agent_timeout_seconds: float = Field(default=240.0, gt=0, le=1800)  # whole run, all steps
     agent_max_context_chars: int = Field(default=60_000, ge=10_000, le=400_000)  # tool results kept
     agent_max_actions: int = Field(default=3, ge=1, le=10)  # proposed changes per run
+    agent_max_tool_calls: int = Field(default=12, ge=1, le=50)  # tool calls per run (all kinds)
+    # Provider tokens (input + output) one run may use before it stops and answers.
+    agent_max_tokens_per_run: int = Field(default=400_000, ge=10_000, le=5_000_000)
     # Agent runs allowed per user within the window (then HTTP 429).
     agent_max_runs: int = Field(default=20, ge=1, le=10_000)
     agent_window_seconds: int = Field(default=600, ge=1, le=86_400)
@@ -222,7 +228,20 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("database_url", "ai_api_key", "anthropic_api_key", "voyage_api_key", mode="before")
+    @field_validator("ai_base_url")
+    @classmethod
+    def _secure_base_url(cls, value: str | None) -> str | None:
+        if value is None or value.strip() == "":
+            return None
+        value = value.strip()
+        local = value.startswith(("http://localhost", "http://127.0.0.1"))
+        if not value.startswith("https://") and not local:
+            raise ValueError("CODEWALK_AI_BASE_URL must use https:// (http:// only for localhost)")
+        return value
+
+    @field_validator(
+        "database_url", "ai_api_key", "anthropic_api_key", "openai_api_key", "voyage_api_key", mode="before"
+    )
     @classmethod
     def _blank_secret_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -263,7 +282,12 @@ class Settings(BaseSettings):
 
     @property
     def ai_credential(self) -> SecretStr | None:
-        return self.ai_api_key or self.anthropic_api_key
+        """CODEWALK_AI_API_KEY, else the selected provider's own variable (never another provider's key)."""
+        if self.ai_api_key:
+            return self.ai_api_key
+        if (self.ai_provider or "anthropic").lower() == "openai":
+            return self.openai_api_key
+        return self.anthropic_api_key
 
     @property
     def cookie_secure(self) -> bool:
