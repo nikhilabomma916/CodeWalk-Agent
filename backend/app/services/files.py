@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -18,11 +19,15 @@ from app.db.models import ActivityType, Analysis, FileVersion, FileVersionSource
 from app.repositories.file_versions import FileVersionRepository
 from app.repositories.files import FileRepository
 from app.repositories.projects import ProjectRepository
-from app.schemas.projects import FileCreate, FileUpdate
+from app.schemas.common import RelativePath
+from app.schemas.projects import FileCreate, FileImportItem, FileImportSkipped, FileUpdate
 from app.services.activity import ActivityRecorder
 from app.services.analysis.service import AnalysisService
 from app.services.file_content import file_values
+from app.services.project_intelligence.scanner import DEFAULT_IGNORED_DIRECTORIES, is_secret_path
 from app.services.projects import ProjectService
+
+_RELATIVE_PATH: TypeAdapter[str] = TypeAdapter(RelativePath)
 
 
 class ContentTooLargeError(AppError):
@@ -109,6 +114,52 @@ class FileService:
             self.session.rollback()
             raise ConflictError(f"{data.path} already exists.", code="file_exists") from None
         return record, analysis
+
+    def import_files(
+        self, project_id: uuid.UUID, items: Sequence[FileImportItem]
+    ) -> tuple[Sequence[ProjectFile], Sequence[FileImportSkipped]]:
+        """Stores one batch of files uploaded from a local folder (all or nothing for the batch).
+
+        Each file is checked on its own: an unsafe path, a credentials file, a dependency/build
+        folder, oversized content, an existing path, or the project file limit skips that file with
+        a reason instead of failing the batch. Existing files are never overwritten.
+        """
+        self._writable_project(project_id)
+        existing = self.files.list_metadata(project_id, limit=1, offset=0)[1]
+        created: list[ProjectFile] = []
+        skipped: list[FileImportSkipped] = []
+        seen: set[str] = set()
+
+        def skip(path: str, reason: str, message: str) -> None:
+            skipped.append(FileImportSkipped(path=path, reason=reason, message=message))
+
+        for item in items:
+            try:
+                path = _RELATIVE_PATH.validate_python(item.path)
+            except ValidationError:
+                skip(item.path, "invalid_path", "The path is not a safe project-relative path.")
+                continue
+            folders = path.split("/")[:-1]
+            if is_secret_path(path):
+                skip(path, "secret", "Credentials files such as .env are never stored.")
+            elif any(folder in DEFAULT_IGNORED_DIRECTORIES for folder in folders):
+                skip(path, "ignored", "Dependency and build folders are not stored.")
+            elif len(item.content.encode("utf-8")) > self.settings.max_source_bytes:
+                skip(path, "too_large", f"Files over {self.settings.max_source_bytes} bytes are not stored.")
+            elif path in seen:
+                skip(path, "duplicate", "The same path appears twice in this upload.")
+            elif self.files.get_by_path(project_id, path) is not None:
+                skip(path, "exists", "A file with this path already exists; it was not overwritten.")
+            elif existing + len(created) >= self.settings.scan_max_files:
+                skip(path, "limit", f"The project already has {self.settings.scan_max_files} files.")
+            else:
+                seen.add(path)
+                record, _ = self.create(project_id, FileCreate(path=path, content=item.content), commit=False)
+                created.append(record)
+                continue
+            seen.add(path)
+        self.session.commit()
+        return created, skipped
 
     def update(
         self, project_id: uuid.UUID, file_id: uuid.UUID, data: FileUpdate, *, commit: bool = True

@@ -1,6 +1,6 @@
 "use client";
 
-import { Code2, FolderKanban, History } from "lucide-react";
+import { Code2, FolderKanban, FolderUp, History } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
@@ -12,6 +12,7 @@ import { UserMenu } from "./user-menu";
 export const NAV_ITEMS = [
   { href: "/app/coding", label: "Coding", icon: Code2 },
   { href: "/app/projects", label: "Projects", icon: FolderKanban },
+  { href: "/app/uploads", label: "Uploads", icon: FolderUp },
   { href: "/app/history", label: "History", icon: History },
 ] as const;
 

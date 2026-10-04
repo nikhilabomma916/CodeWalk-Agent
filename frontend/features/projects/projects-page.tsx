@@ -77,7 +77,10 @@ export function ProjectsPage() {
   const load = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const [projects, workspace] = await Promise.all([listProjects(), getWorkspaceFolders()]);
+      const [projects, workspace] = await Promise.all([
+        listProjects({ origin: "workspace" }),
+        getWorkspaceFolders(),
+      ]);
       setState({
         status: "ready",
         projects,

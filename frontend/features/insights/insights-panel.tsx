@@ -29,9 +29,21 @@ function message(error: unknown, fallback: string): string {
   return isApiError(error) ? error.message : fallback;
 }
 
-function Locations({ title, items }: { title: string; items: InsightLocation[] }) {
+/** Where a clicked location goes: the Coding editor by default, or a caller-provided view. */
+export type OpenLocation = (path: string, line: number) => void;
+
+function Locations({
+  title,
+  items,
+  onOpen,
+}: {
+  title: string;
+  items: InsightLocation[];
+  onOpen?: OpenLocation;
+}) {
   const { actions } = useWorkspace();
   if (items.length === 0) return null;
+  const open: OpenLocation = onOpen ?? ((path, line) => void actions.revealPosition(path, line, 1));
   return (
     <div>
       <h4 className="text-[11px] font-semibold text-fg-muted">
@@ -51,7 +63,7 @@ function Locations({ title, items }: { title: string; items: InsightLocation[] }
             </span>
             <button
               type="button"
-              onClick={() => void actions.revealPosition(item.file_path, item.lines[0] ?? 1, 1)}
+              onClick={() => open(item.file_path, item.lines[0] ?? 1)}
               className="font-mono text-accent hover:underline"
             >
               {item.file_path}
@@ -68,7 +80,7 @@ function Locations({ title, items }: { title: string; items: InsightLocation[] }
   );
 }
 
-function ImpactView({ impact }: { impact: Impact }) {
+export function ImpactView({ impact, onOpen }: { impact: Impact; onOpen?: OpenLocation }) {
   // A symbol the file does not define has no dependents of its own: say so instead of "nothing
   // depends on it", which would imply the symbol exists.
   const undefinedSymbol = impact.symbol !== null && impact.definitions.length === 0;
@@ -85,9 +97,9 @@ function ImpactView({ impact }: { impact: Impact }) {
           .
         </p>
       )}
-      <Locations title="Direct dependents" items={impact.direct_dependents} />
-      <Locations title="Indirect dependents" items={impact.indirect_dependents} />
-      <Locations title="Related tests" items={impact.related_tests} />
+      <Locations title="Direct dependents" items={impact.direct_dependents} onOpen={onOpen} />
+      <Locations title="Indirect dependents" items={impact.indirect_dependents} onOpen={onOpen} />
+      <Locations title="Related tests" items={impact.related_tests} onOpen={onOpen} />
       {impact.related_api_routes.length > 0 && (
         <div>
           <h4 className="text-[11px] font-semibold text-fg-muted">HTTP routes</h4>
@@ -106,6 +118,7 @@ function ImpactView({ impact }: { impact: Impact }) {
       <Locations
         title="Possible references (same name, no import)"
         items={impact.possible_references}
+        onOpen={onOpen}
       />
       {!undefinedSymbol &&
         impact.direct_dependents.length +
@@ -117,7 +130,7 @@ function ImpactView({ impact }: { impact: Impact }) {
   );
 }
 
-function ArchitectureView({ data }: { data: Architecture }) {
+export function ArchitectureView({ data }: { data: Architecture }) {
   return (
     <div className="space-y-1.5 text-[11px]">
       <p className="text-fg-muted">

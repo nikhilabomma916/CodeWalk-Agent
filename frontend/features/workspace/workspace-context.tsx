@@ -334,6 +334,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       },
 
       async openServerProject(project) {
+        // Uploaded folders are analyzed in the Uploads area, never edited in Coding.
+        if (project.origin === "upload") return false;
         if (!(await confirmDiscardAll())) return false;
         await loadSource(new ServerProjectSource(project));
         return true;
@@ -344,7 +346,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (!id || sourceRef.current) return false;
         try {
           const project = await getProject(id);
-          if (sourceRef.current) return false;
+          if (sourceRef.current || project.origin === "upload") return false;
           await loadSource(new ServerProjectSource(project));
           return true;
         } catch (error) {

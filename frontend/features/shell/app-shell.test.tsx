@@ -45,6 +45,7 @@ describe("AppShell navigation", () => {
       "/app/projects",
       "/app/coding",
       "/app/projects",
+      "/app/uploads",
       "/app/history",
     ]);
     expect(within(nav).getByRole("link", { name: "Projects" })).toHaveAttribute(

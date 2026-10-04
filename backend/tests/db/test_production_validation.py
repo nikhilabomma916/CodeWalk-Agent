@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -32,6 +33,7 @@ from app.db.models import (
     FileVersion,
     Project,
     ProjectFile,
+    ProjectOrigin,
     User,
 )
 from app.services.ai.service import AIService
@@ -54,19 +56,24 @@ def test_upgrading_a_populated_database_keeps_its_data(database_url: str, engine
             user = User(email="legacy@example.com", name="Legacy", password_hash="x")
             session.add(user)
             session.flush()
-            project = Project(owner_id=user.id, name="Legacy project")
-            session.add(project)
-            session.flush()
-            session.add(ProjectFile(project_id=project.id, **file_values("app.py", "print('kept')\n")))
+            # Inserted with the old schema's columns only (the current model has columns added later).
+            project_id = uuid.uuid4()
+            session.execute(
+                text("INSERT INTO projects (id, owner_id, name) VALUES (:id, :owner, 'Legacy project')"),
+                {"id": project_id, "owner": user.id},
+            )
+            session.add(ProjectFile(project_id=project_id, **file_values("app.py", "print('kept')\n")))
             session.commit()
-            ids = (user.id, project.id)
+            ids = (user.id, project_id)
     finally:
         command.upgrade(config, "head")
     tables = set(inspect(engine).get_table_names())
     assert {"code_chunks", "agent_runs", "agent_actions"} <= tables
     with Session(engine) as session:
         assert session.get(User, ids[0]) is not None
-        assert session.get(Project, ids[1]) is not None
+        legacy = session.get(Project, ids[1])
+        assert legacy is not None
+        assert legacy.origin is ProjectOrigin.WORKSPACE  # existing projects stay in the workspace
         stored = session.scalar(select(ProjectFile.content).where(ProjectFile.project_id == ids[1]))
         assert stored == "print('kept')\n"
         version: str = session.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
