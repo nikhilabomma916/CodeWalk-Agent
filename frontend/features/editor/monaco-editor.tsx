@@ -4,6 +4,7 @@ import Editor from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { useEffect, useRef } from "react";
 
+import { useTheme } from "@/features/theme/theme-context";
 import type { EditorSettings, ReplaceRequest, RevealRequest } from "@/features/workspace/state";
 import type { Diagnostic } from "@/types/diagnostics";
 
@@ -14,7 +15,7 @@ import {
   configureMonaco,
   modelUri,
   MONO_FONT_STACK,
-  THEME_NAME,
+  monacoTheme,
   toMarkers,
   type Monaco,
 } from "./monaco-setup";
@@ -62,6 +63,7 @@ function applyReveal(instance: editor.IStandaloneCodeEditor, reveal: RevealReque
 }
 
 export default function MonacoEditor(props: MonacoEditorProps) {
+  const { theme } = useTheme();
   const { projectId, path, initialContent, language, settings, readOnly, openPaths, reveal } =
     props;
   const { diagnostics } = props;
@@ -184,7 +186,7 @@ export default function MonacoEditor(props: MonacoEditorProps) {
       path={modelUri(projectId, path)}
       defaultValue={initialContent}
       language={language}
-      theme={THEME_NAME}
+      theme={monacoTheme(theme)}
       keepCurrentModel
       saveViewState
       beforeMount={configureMonaco}

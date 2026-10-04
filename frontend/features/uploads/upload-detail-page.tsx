@@ -253,7 +253,7 @@ function AgentAnswer({ run, onOpen }: { run: AgentRun; onOpen: OpenLocation }) {
                 <span className="font-medium text-fg">{f.title}</span>{" "}
                 <button
                   type="button"
-                  className="font-mono text-accent hover:underline"
+                  className="font-mono text-accent-text hover:underline"
                   onClick={() => onOpen(f.file_path, f.start_line)}
                 >
                   {f.file_path}:{f.start_line}
@@ -273,7 +273,7 @@ function AgentAnswer({ run, onOpen }: { run: AgentRun; onOpen: OpenLocation }) {
               <li key={path}>
                 <button
                   type="button"
-                  className="font-mono text-accent hover:underline"
+                  className="font-mono text-accent-text hover:underline"
                   onClick={() => onOpen(path, 1)}
                 >
                   {path}
@@ -439,7 +439,7 @@ function SearchPanel({ projectId, onOpen }: { projectId: string; onOpen: OpenLoc
             <li key={`${r.file_path}:${r.line}:${i}`}>
               <button
                 type="button"
-                className="font-mono text-accent hover:underline"
+                className="font-mono text-accent-text hover:underline"
                 onClick={() => onOpen(r.file_path, r.line ?? 1)}
               >
                 {r.file_path}

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { LogoMark } from "@/components/ui/logo";
+import { ThemeToggle } from "@/features/theme/theme-context";
 
 import { UserMenu } from "./user-menu";
 
@@ -70,6 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </ul>
 
+        <ThemeToggle className="size-8 shrink-0 md:mb-1 md:size-auto md:h-8 md:w-full" />
         <UserMenu />
       </nav>
 

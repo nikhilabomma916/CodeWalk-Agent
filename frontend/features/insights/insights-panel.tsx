@@ -64,7 +64,7 @@ function Locations({
             <button
               type="button"
               onClick={() => open(item.file_path, item.lines[0] ?? 1)}
-              className="font-mono text-accent hover:underline"
+              className="font-mono text-accent-text hover:underline"
             >
               {item.file_path}
               {item.lines.length ? `:${item.lines.join(",")}` : ""}

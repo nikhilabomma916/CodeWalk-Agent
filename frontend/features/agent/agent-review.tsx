@@ -50,7 +50,7 @@ export function AgentReview({ path }: { path: string }) {
           type="button"
           disabled={stale || dirty || busy || state.project?.readOnly}
           onClick={() => void approve(action)}
-          className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-50"
+          className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
         >
           {busy ? "Applying…" : "Apply"}
         </button>

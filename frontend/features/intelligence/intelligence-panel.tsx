@@ -34,7 +34,7 @@ function FileLink({ path, onOpen }: { path: string; onOpen(path: string): void }
     <button
       type="button"
       onClick={() => onOpen(path)}
-      className="truncate text-left font-mono text-accent hover:underline"
+      className="truncate text-left font-mono text-accent-text hover:underline"
       title={`Open ${path}`}
     >
       {path}

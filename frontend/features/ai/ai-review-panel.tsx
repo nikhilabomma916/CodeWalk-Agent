@@ -47,7 +47,7 @@ function FindingItem({ finding, onReveal }: { finding: AIFinding; onReveal(line:
           <button
             type="button"
             onClick={() => onReveal(finding.line!)}
-            className="shrink-0 font-mono text-[11px] text-accent hover:underline"
+            className="shrink-0 font-mono text-[11px] text-accent-text hover:underline"
             aria-label={`Go to line ${finding.line}`}
           >
             :{finding.line}
@@ -110,7 +110,7 @@ export function AIReviewPanel() {
           type="button"
           disabled={!path || running || !!unavailable || status.state === "loading"}
           onClick={() => path && void runReview(path, analysisType)}
-          className="rounded bg-accent px-2 py-0.5 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-50"
+          className="rounded bg-accent px-2 py-0.5 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
         >
           {running ? "Reviewing…" : path ? `Review ${path.split("/").pop()}` : "Review file"}
         </button>

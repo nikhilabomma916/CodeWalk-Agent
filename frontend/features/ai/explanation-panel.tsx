@@ -47,7 +47,7 @@ export function ExplanationPanel() {
           <span className="text-fg">{diagnostic.message}</span>{" "}
           <button
             type="button"
-            className="font-mono text-[11px] text-accent hover:underline"
+            className="font-mono text-[11px] text-accent-text hover:underline"
             onClick={() =>
               void actions.revealPosition(diagnostic.file, diagnostic.line, diagnostic.column)
             }
@@ -76,7 +76,7 @@ export function ExplanationPanel() {
                       <li key={`${location.file_path}:${location.line}:${location.reason}`}>
                         <button
                           type="button"
-                          className="font-mono text-[11px] text-accent hover:underline"
+                          className="font-mono text-[11px] text-accent-text hover:underline"
                           onClick={() =>
                             location.line
                               ? void actions.revealPosition(location.file_path, location.line, 1)
@@ -158,7 +158,7 @@ export function ExplanationPanel() {
       <button
         type="button"
         onClick={openReview}
-        className="rounded bg-accent px-2 py-1 text-xs font-medium text-white hover:bg-accent-strong"
+        className="rounded bg-accent px-2 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover"
       >
         Review suggested fix
       </button>

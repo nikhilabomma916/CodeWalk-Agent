@@ -442,7 +442,7 @@ function HistoryDetail({ eventId, onClose }: { eventId: string; onClose(): void 
             detail.project_exists && detail.project_id ? (
               <Link
                 href={`/app/projects/${detail.project_id}`}
-                className="text-accent hover:underline"
+                className="text-accent-text hover:underline"
               >
                 {detail.current_project_name}
               </Link>
