@@ -518,3 +518,147 @@ describe("Agent request races", () => {
     expect(screen.getByText(NEW)).toBeInTheDocument();
   });
 });
+
+describe("Agent workflows (Module 17)", () => {
+  const FINDINGS = [
+    {
+      id: "F1",
+      severity: "low",
+      category: "maintainability",
+      title: "Loop could be a sum()",
+      file_path: PATH,
+      start_line: 2,
+      end_line: 3,
+      explanation: "A generator with sum() is clearer.",
+      evidence: "for item in items:",
+      suggestion: "Use sum(item.price for item in items).",
+      confidence: "medium",
+      excerpt: ["    for item in items:"],
+    },
+    {
+      id: "F2",
+      severity: "high",
+      category: "bug",
+      title: "total used before assignment",
+      file_path: PATH,
+      start_line: 3,
+      end_line: 3,
+      explanation: "Raises UnboundLocalError on the first item.",
+      evidence: "total += item.price",
+      suggestion: "Initialise total = 0.",
+      confidence: "high",
+      excerpt: ["        total += item.price"],
+    },
+  ];
+  const REVIEW_RUN = {
+    ...RUN,
+    mode: "review",
+    actions: [],
+    findings: FINDINGS,
+    usage: {
+      provider_calls: 3,
+      input_tokens: 1200,
+      output_tokens: 300,
+      tool_calls: 2,
+      largest_prompt_chars: 9000,
+    },
+    context: { files_inspected: [PATH, "shop/pricing.py"], memory_items: 2 },
+  };
+
+  it("runs the chosen workflow and shows findings by severity with their evidence", async () => {
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json(REVIEW_RUN)],
+    ]);
+    await userEvent.selectOptions(await screen.findByLabelText("Workflow"), "review");
+    await ask("Review this file");
+    const findings = await screen.findByRole("region", { name: "Review findings" });
+    expect(requestsOf(fetchMock).find((r) => r.path === "/agent/run")!.body.mode).toBe("review");
+    expect(within(findings).getByText(/1 high, 1 low/)).toBeInTheDocument();
+    const items = within(findings).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("high"); // highest severity first, labelled in text
+    expect(items[0]).toHaveTextContent("Evidence: total += item.price");
+    expect(
+      screen.getByText(/2 files inspected · 2 project note\(s\) · 3 model call\(s\), 1,500 tokens/),
+    ).toBeInTheDocument();
+  });
+
+  it("asks for a fix for one finding as a new request", async () => {
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json(REVIEW_RUN)],
+    ]);
+    await ask("Review this file");
+    const findings = await screen.findByRole("region", { name: "Review findings" });
+    await userEvent.click(within(findings).getAllByRole("button", { name: "Propose fix" })[0]);
+    await waitFor(() =>
+      expect(requestsOf(fetchMock).filter((r) => r.path === "/agent/run")).toHaveLength(2),
+    );
+    const second = requestsOf(fetchMock).filter((r) => r.path === "/agent/run")[1];
+    expect(second.body.mode).toBe("assist");
+    expect(String(second.body.message)).toContain("total used before assignment");
+    expect(String(second.body.message)).toContain(`${PATH}:3`);
+  });
+
+  it("applies a multi-file change only as a whole", async () => {
+    const other = { ...ACTION, id: "a2", file_path: "shop/pricing.py", summary: ACTION.summary };
+    const grouped = [ACTION, other].map((a) => ({
+      ...a,
+      group_id: "g1",
+      group_size: 2,
+      risk: "low",
+    }));
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json({ ...RUN, actions: grouped })],
+      [
+        "POST",
+        /^\/agent\/groups\/g1\/approve$/,
+        () =>
+          json({
+            group_id: "g1",
+            actions: grouped.map((a) => ({ ...a, status: "applied" })),
+            files: [
+              {
+                action_id: "a1",
+                file: { file_id: "f1", path: PATH, content: FIXED, content_hash: "h2", version: 2 },
+                diagnostic_count: 0,
+              },
+            ],
+          }),
+      ],
+      ["GET", /^\/projects\/p1\/files$/, () => json({ ...page([FILE]), limit: 5000 })],
+    ]);
+    await ask("Rename it");
+    const card = await screen.findByRole("listitem", { name: "Proposed change to 2 files" });
+    expect(within(card).getByText(/2 files, applied together · risk low/)).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Apply all 2 files" }));
+    await waitFor(() => expect(screen.getByTestId("buffer").textContent).toBe(FIXED));
+    expect(requestsOf(fetchMock).some((r) => r.path === "/agent/groups/g1/approve")).toBe(true);
+    expect(requestsOf(fetchMock).some((r) => r.path.startsWith("/agent/actions/"))).toBe(false);
+  });
+
+  it("labels a new-file proposal and shows its content before it is created", async () => {
+    const created = {
+      ...ACTION,
+      id: "a3",
+      kind: "create_file",
+      file_path: "tests/test_cart.py",
+      summary: "Tests for cart_total",
+      diff: "--- /dev/null\n+++ b/tests/test_cart.py\n@@ -0,0 +1,2 @@\n+def test_empty():\n+    assert True\n",
+    };
+    renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json({ ...RUN, actions: [created] })],
+    ]);
+    await ask("Generate tests");
+    const card = await screen.findByRole("listitem", {
+      name: "Proposed new file tests/test_cart.py",
+    });
+    expect(within(card).getByText("new file")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Create file" })).toBeEnabled();
+    expect(within(card).queryByRole("button", { name: "Review diff" })).not.toBeInTheDocument();
+    expect(within(card).getByText("+def test_empty():")).toBeInTheDocument();
+  });
+});

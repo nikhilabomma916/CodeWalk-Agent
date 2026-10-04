@@ -16,6 +16,8 @@ const statusSchema = z.object({
   tools: z.array(z.object({ name: z.string(), description: z.string(), permission })),
   max_steps: z.number(),
   max_actions: z.number(),
+  max_tool_calls: z.number().optional().default(0),
+  modes: z.array(z.string()).optional().default([]),
 });
 export type AgentStatus = z.infer<typeof statusSchema>;
 
@@ -72,6 +74,10 @@ const actionSchema = z.object({
   id: z.string(),
   run_id: z.string(),
   kind: z.string(),
+  group_id: z.string().nullable().optional().default(null),
+  group_size: z.number().optional().default(1),
+  confidence: z.string().nullable().optional().default(null),
+  risk: z.string().nullable().optional().default(null),
   status: z.enum(ACTION_STATUSES),
   file_path: z.string(),
   summary: z.string(),
@@ -86,9 +92,53 @@ const actionSchema = z.object({
 });
 export type AgentAction = z.infer<typeof actionSchema>;
 
+/** Module 17: the workflows the agent can run. */
+export const AGENT_MODES = [
+  "assist",
+  "review",
+  "tests",
+  "docs",
+  "refactor",
+  "impact",
+  "architecture",
+] as const;
+export type AgentMode = (typeof AGENT_MODES)[number];
+
+export const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
+const findingSchema = z.object({
+  id: z.string(),
+  severity: z.enum(SEVERITIES),
+  category: z.string(),
+  title: z.string(),
+  file_path: z.string(),
+  start_line: z.number(),
+  end_line: z.number(),
+  explanation: z.string(),
+  evidence: z.string(),
+  suggestion: z.string(),
+  confidence: z.string(),
+  excerpt: z.array(z.string()),
+});
+export type ReviewFinding = z.infer<typeof findingSchema>;
+
+const usageSchema = z.object({
+  provider_calls: z.number(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+  tool_calls: z.number(),
+  largest_prompt_chars: z.number(),
+});
+
 const runSchema = z.object({
   id: z.string(),
   project_id: z.string(),
+  mode: z.string().optional().default("assist"),
+  findings: z.array(findingSchema).optional().default([]),
+  usage: usageSchema.optional(),
+  context: z
+    .object({ files_inspected: z.array(z.string()), memory_items: z.number() })
+    .optional()
+    .default({ files_inspected: [], memory_items: 0 }),
   status: z.enum(["completed", "limit_reached", "failed"]),
   message: z.string(),
   file_path: z.string().nullable(),
@@ -121,6 +171,25 @@ const decisionSchema = z.object({
 });
 export type ActionDecision = z.infer<typeof decisionSchema>;
 
+const groupDecisionSchema = z.object({
+  group_id: z.string(),
+  actions: z.array(actionSchema),
+  files: z.array(
+    z.object({
+      action_id: z.string(),
+      file: z.object({
+        file_id: z.string(),
+        path: z.string(),
+        content: z.string(),
+        content_hash: z.string(),
+        version: z.number().nullable(),
+      }),
+      diagnostic_count: z.number(),
+    }),
+  ),
+});
+export type GroupDecision = z.infer<typeof groupDecisionSchema>;
+
 export interface SelectionRange {
   startLine: number;
   startColumn: number;
@@ -136,6 +205,7 @@ export interface AgentRunInput {
   code?: string;
   selection?: SelectionRange | null;
   diagnostics?: Diagnostic[];
+  mode?: AgentMode;
 }
 
 export async function getAgentStatus(client: ApiClient = apiClient): Promise<AgentStatus> {
@@ -164,6 +234,7 @@ export async function runAgent(
             }
           : undefined,
       diagnostics: (input.diagnostics ?? []).slice(0, 50).map(toBackendDiagnostic),
+      mode: input.mode ?? "assist",
     },
     schema: runSchema,
     timeoutMs: AGENT_RUN_TIMEOUT_MS,
@@ -185,6 +256,19 @@ export async function decideAgentAction(
   const { data } = await client.request(
     `/agent/actions/${encodeURIComponent(actionId)}/${decision}`,
     { method: "POST", schema: decisionSchema, timeoutMs: 60_000 },
+  );
+  return data;
+}
+
+/** Approve or reject every file of a multi-file proposal together (Module 17). */
+export async function decideAgentGroup(
+  groupId: string,
+  decision: "approve" | "reject",
+  client: ApiClient = apiClient,
+): Promise<GroupDecision> {
+  const { data } = await client.request(
+    `/agent/groups/${encodeURIComponent(groupId)}/${decision}`,
+    { method: "POST", schema: groupDecisionSchema, timeoutMs: 60_000 },
   );
   return data;
 }

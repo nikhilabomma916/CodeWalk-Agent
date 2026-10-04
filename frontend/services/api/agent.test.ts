@@ -133,6 +133,7 @@ describe("agent API client", () => {
           end_column: 14,
         },
       ],
+      mode: "assist",
     });
     expect(init.credentials).toBe("include");
   });

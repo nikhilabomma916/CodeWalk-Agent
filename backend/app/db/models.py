@@ -341,6 +341,15 @@ class AgentRun(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     warnings: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Module 17: the workflow the developer chose (assist, review, tests, ...), review findings the
+    # agent recorded (validated against the project), and usage (provider calls, tokens, context size).
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="assist", server_default="assist")
+    findings: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    usage: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
 
     actions: Mapped[list[AgentAction]] = relationship(
         back_populates="run",
@@ -366,8 +375,16 @@ class AgentAction(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     project_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
     )
-    # Deleting the file deletes its pending proposals.
-    file_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    # Deleting the file deletes its pending proposals. None for a proposal that creates a new file.
+    file_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("files.id", ondelete="CASCADE"))
+    # Module 17: "code_change" edits an existing file; "create_file" adds a new one. Proposals made by
+    # one tool call share a group: a multi-file change is approved or rejected as a whole.
+    kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="code_change", server_default="code_change"
+    )
+    group_id: Mapped[uuid.UUID | None] = mapped_column()
+    confidence: Mapped[str | None] = mapped_column(String(16))
+    risk: Mapped[str | None] = mapped_column(String(16))
     file_path: Mapped[str] = mapped_column(String(MAX_PATH_LENGTH), nullable=False)
     status: Mapped[AgentActionStatus] = mapped_column(
         _enum(AgentActionStatus, "agent_action_status"), nullable=False
@@ -388,4 +405,30 @@ class AgentAction(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
         Index("ix_agent_actions_run_id", "run_id"),
         Index("ix_agent_actions_user_id_status", "user_id", "status"),
         Index("ix_agent_actions_file_id", "file_id"),
+        Index("ix_agent_actions_group_id", "group_id"),
     )
+
+
+class MemoryKind(StrEnum):
+    CONVENTION = "convention"
+    DECISION = "decision"
+    TERMINOLOGY = "terminology"
+    CONSTRAINT = "constraint"
+    PREFERENCE = "preference"
+
+
+class ProjectMemory(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
+    """A short note the developer saved for the AI about one of their projects (a convention, decision,
+    term, constraint, or preference). Written only by the developer through the API, never by the model;
+    bounded in size and number; checked for credentials before it is stored."""
+
+    __tablename__ = "project_memories"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[MemoryKind] = mapped_column(_enum(MemoryKind, "memory_kind"), nullable=False)
+    text: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    __table_args__ = (Index("ix_project_memories_project_id_created_at", "project_id", "created_at"),)

@@ -81,7 +81,10 @@ class FileService:
         self.projects.get(project_id)
         return self.files.list_metadata(project_id, limit=limit, offset=offset)
 
-    def create(self, project_id: uuid.UUID, data: FileCreate) -> tuple[ProjectFile, Analysis | None]:
+    def create(
+        self, project_id: uuid.UUID, data: FileCreate, *, commit: bool = True
+    ) -> tuple[ProjectFile, Analysis | None]:
+        """``commit=False`` leaves the transaction open, so several saves can be committed together."""
         project = self._writable_project(project_id)
         self._check_size(data.content)
         if self.files.get_by_path(project_id, data.path) is not None:
@@ -98,16 +101,20 @@ class FileService:
                 details={"version": version},
             )
             self.project_repository.touch(project)
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
         except IntegrityError:
             self.session.rollback()
             raise ConflictError(f"{data.path} already exists.", code="file_exists") from None
         return record, analysis
 
     def update(
-        self, project_id: uuid.UUID, file_id: uuid.UUID, data: FileUpdate
+        self, project_id: uuid.UUID, file_id: uuid.UUID, data: FileUpdate, *, commit: bool = True
     ) -> tuple[ProjectFile, Analysis | None]:
-        return self._update(project_id, file_id, data, FileVersionSource.EDIT)
+        """``commit=False`` leaves the transaction open, so several saves can be committed together."""
+        return self._update(project_id, file_id, data, FileVersionSource.EDIT, commit=commit)
 
     def _update(
         self,
@@ -117,6 +124,7 @@ class FileService:
         source: FileVersionSource,
         *,
         restored_from: int | None = None,
+        commit: bool = True,
     ) -> tuple[ProjectFile, Analysis | None]:
         project = self._writable_project(project_id)
         record = self.get(project_id, file_id)
@@ -153,11 +161,15 @@ class FileService:
                 details=details,
             )
             self.project_repository.touch(project)
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
         except IntegrityError:
             self.session.rollback()
             raise ConflictError(f"{new_path} already exists.", code="file_exists") from None
-        self.session.refresh(record)
+        if commit:
+            self.session.refresh(record)
         return record, analysis
 
     def delete(self, project_id: uuid.UUID, file_id: uuid.UUID) -> None:

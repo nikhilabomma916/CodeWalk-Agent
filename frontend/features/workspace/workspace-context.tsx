@@ -127,6 +127,8 @@ export interface WorkspaceActions {
   analyzeServerProject(): Promise<void>;
   /** Loads the latest stored project intelligence, if any. */
   loadIntelligence(): Promise<void>;
+  /** Re-reads the file list (e.g. after an approved proposal created a file). */
+  refreshEntries(): Promise<void>;
 }
 
 interface WorkspaceContextValue {
@@ -348,6 +350,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         } catch (error) {
           if (isApiError(error) && error.status === 404) rememberServerProject(null);
           return false;
+        }
+      },
+
+      async refreshEntries() {
+        const source = sourceRef.current;
+        if (!source) return;
+        const listing = await source.list();
+        if (sourceRef.current === source) {
+          dispatch({ type: "project/entries-refreshed", entries: listing.entries });
         }
       },
 

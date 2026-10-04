@@ -17,6 +17,19 @@ MAX_SELECTION_CHARS = 20_000
 MAX_DIAGNOSTICS = 50
 
 
+class AgentMode(StrEnum):
+    """The workflow the developer chose (Module 17). Each adds instructions and favors certain tools;
+    the permissions and limits are the same for every mode."""
+
+    ASSIST = "assist"  # answer, explain, and fix on request
+    REVIEW = "review"  # project-aware code review with recorded findings
+    TESTS = "tests"  # propose tests that follow the project's conventions
+    DOCS = "docs"  # propose documentation grounded in the code
+    REFACTOR = "refactor"  # impact analysis and a reviewable (possibly multi-file) change
+    IMPACT = "impact"  # what may break if something changes
+    ARCHITECTURE = "architecture"  # explain how the project is built
+
+
 class SelectionRange(BaseModel):
     """1-based, inclusive start; end is exclusive of nothing (Monaco-style positions)."""
 
@@ -50,6 +63,7 @@ class AgentRunRequest(BaseModel):
     diagnostics: list[DiagnosticInput] = Field(
         default_factory=list, max_length=MAX_DIAGNOSTICS, description="Problems currently shown for the file."
     )
+    mode: AgentMode = Field(default=AgentMode.ASSIST, description="The workflow to run.")
 
     @model_validator(mode="after")
     def _file_context(self) -> AgentRunRequest:
@@ -118,7 +132,13 @@ class AgentActionOut(BaseModel):
 
     id: uuid.UUID
     run_id: uuid.UUID
-    kind: str = "code_change"
+    kind: str = Field(default="code_change", description="code_change (edit a file) or create_file.")
+    group_id: uuid.UUID | None = Field(
+        default=None, description="Proposals sharing a group are approved or rejected together."
+    )
+    group_size: int = 1
+    confidence: str | None = None
+    risk: str | None = None
     status: str
     file_path: str
     summary: str
@@ -139,9 +159,42 @@ class AgentRunError(BaseModel):
     message: str
 
 
+class ReviewFinding(BaseModel):
+    """A review finding the agent recorded; its file and lines were checked against the project."""
+
+    id: str
+    severity: str = Field(description="info | low | medium | high | critical")
+    category: str
+    title: str
+    file_path: str
+    start_line: int
+    end_line: int
+    explanation: str
+    evidence: str
+    suggestion: str
+    confidence: str = Field(description="low | medium | high")
+    excerpt: list[str] = Field(default_factory=list, description="The project lines the finding points at.")
+
+
+class AgentUsage(BaseModel):
+    provider_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    tool_calls: int = 0
+    largest_prompt_chars: int = Field(default=0, description="Size of the largest prompt sent in this run.")
+
+
+class AgentContextInfo(BaseModel):
+    """What the agent used: shown to the developer so the context is never a black box."""
+
+    files_inspected: list[str] = Field(default_factory=list)
+    memory_items: int = 0
+
+
 class AgentRunOut(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
+    mode: str = AgentMode.ASSIST.value
     status: str = Field(description="completed | limit_reached | failed")
     message: str
     file_path: str | None
@@ -152,6 +205,9 @@ class AgentRunOut(BaseModel):
     events: list[AgentEvent]
     tool_calls: list[ToolCallRecord]
     actions: list[AgentActionOut]
+    findings: list[ReviewFinding] = Field(default_factory=list)
+    usage: AgentUsage = Field(default_factory=AgentUsage)
+    context: AgentContextInfo = Field(default_factory=AgentContextInfo)
     warnings: list[str]
     duration_ms: int
     created_at: datetime
@@ -170,6 +226,8 @@ class AgentStatusResponse(BaseModel):
     tools: list[AgentToolInfo]
     max_steps: int
     max_actions: int
+    max_tool_calls: int = 0
+    modes: list[str] = Field(default_factory=list)
 
 
 class AppliedFile(BaseModel):
@@ -186,3 +244,17 @@ class ActionDecisionResponse(BaseModel):
     diagnostics: list[dict[str, Any]] = Field(
         default_factory=list, description="Deterministic analysis of the saved file, after an approval."
     )
+
+
+class AppliedGroupFile(BaseModel):
+    action_id: uuid.UUID
+    file: AppliedFile
+    diagnostic_count: int
+
+
+class GroupDecisionResponse(BaseModel):
+    """The decision on every proposal of a group (they are applied together or not at all)."""
+
+    group_id: uuid.UUID
+    actions: list[AgentActionOut]
+    files: list[AppliedGroupFile] = Field(default_factory=list)

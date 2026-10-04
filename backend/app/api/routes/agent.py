@@ -18,6 +18,7 @@ from app.schemas.agent import (
     AgentRunOut,
     AgentRunRequest,
     AgentStatusResponse,
+    GroupDecisionResponse,
 )
 from app.schemas.errors import ErrorResponse
 
@@ -124,3 +125,28 @@ def approve_action(action_id: uuid.UUID, service: AgentActionServiceDep) -> Acti
 )
 def reject_action(action_id: uuid.UUID, service: AgentActionServiceDep) -> ActionDecisionResponse:
     return service.reject(action_id)
+
+
+@router.post(
+    "/groups/{group_id}/approve",
+    response_model=GroupDecisionResponse,
+    summary="Apply a multi-file proposal (explicit developer approval of every file)",
+    description=(
+        "Re-validates every file of the proposal against its current content. If any file changed, nothing "
+        "is applied and the whole proposal becomes stale. Otherwise all files are saved in one transaction "
+        "(new versions, deterministic re-analysis), and their diagnostics counts are returned."
+    ),
+    responses=_DECISION_ERRORS,
+)
+def approve_group(group_id: uuid.UUID, service: AgentActionServiceDep) -> GroupDecisionResponse:
+    return service.approve_group(group_id)
+
+
+@router.post(
+    "/groups/{group_id}/reject",
+    response_model=GroupDecisionResponse,
+    summary="Reject a multi-file proposal (no file is changed)",
+    responses=_DECISION_ERRORS,
+)
+def reject_group(group_id: uuid.UUID, service: AgentActionServiceDep) -> GroupDecisionResponse:
+    return service.reject_group(group_id)

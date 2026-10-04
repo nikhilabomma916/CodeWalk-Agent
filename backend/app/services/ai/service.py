@@ -115,7 +115,7 @@ class AIService:
             try:
                 self.provider = create_provider(settings)
             except UnknownProviderError as exc:
-                self.provider_problem = f"Unknown AI provider {exc.args[0]!r} (supported: anthropic)."
+                self.provider_problem = f"Unknown AI provider {exc.args[0]!r} (supported: anthropic, openai)."
 
     def status(self) -> AIStatusResponse:
         enabled = self.settings.ai_enabled
