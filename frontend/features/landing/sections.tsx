@@ -95,20 +95,20 @@ const AUTH_CODE = [
 const AUTH_PROBLEMS: Problem[] = [
   {
     severity: "error",
-    message: "Undefined name 'session_store'",
-    source: "python(F821)",
+    message: "Undefined name `session_store`",
+    source: "ruff(F821)",
     location: "12:12",
   },
   {
     severity: "warning",
-    message: "'datetime' imported but unused",
-    source: "python(F401)",
-    location: "1:1",
+    message: "`datetime.datetime` imported but unused",
+    source: "ruff(F401)",
+    location: "1:22",
   },
   {
     severity: "warning",
-    message: "Local variable 'retries' is assigned but never used",
-    source: "python(F841)",
+    message: "Local variable `retries` is assigned to but never used",
+    source: "ruff(F841)",
     location: "10:5",
   },
 ];
@@ -120,7 +120,7 @@ export function Hero() {
     <section id="home" aria-labelledby="hero-title" className="relative overflow-hidden">
       <div aria-hidden className={`pointer-events-none absolute inset-0 ${styles.grid}`} />
       <div
-        className={`${wideContainer} relative grid gap-12 pt-14 pb-20 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.25fr)] lg:items-center lg:gap-10 lg:pt-20 lg:pb-28`}
+        className={`${wideContainer} relative grid grid-cols-1 gap-12 pt-14 pb-20 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.25fr)] lg:items-center lg:gap-10 lg:pt-20 lg:pb-28`}
       >
         <div className={styles.heroText}>
           <Eyebrow>AI-powered development environment</Eyebrow>
@@ -186,7 +186,7 @@ export function Hero() {
             </div>
             <AiPanel
               context={["auth.py:12", "services.py", "models.py", "F821"]}
-              className={`border-t border-border xl:border-t-0 xl:border-l ${styles.stage2}`}
+              className={`border-t border-border sm:col-span-2 xl:col-span-1 xl:border-t-0 xl:border-l ${styles.stage2}`}
             >
               <p className="text-fg">
                 This function references an undefined variable:{" "}
@@ -238,8 +238,8 @@ export function ProblemSection() {
         <h2 id="problem-title" className="sr-only">
           From one file to the whole project
         </h2>
-        <div className="grid gap-6 md:grid-cols-2">
-          <div className={`${styles.reveal} rounded-lg border border-border bg-surface p-6 sm:p-8`}>
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+          <div className={`${styles.reveal} rounded-lg border border-border bg-surface p-5 sm:p-8`}>
             <p className="text-[11px] font-semibold tracking-[0.18em] text-fg-subtle uppercase">
               A typical editor
             </p>
@@ -253,7 +253,7 @@ export function ProblemSection() {
             </div>
           </div>
           <div
-            className={`${styles.reveal} relative rounded-lg border border-accent/50 bg-surface p-6 sm:p-8`}
+            className={`${styles.reveal} relative rounded-lg border border-accent/50 bg-surface p-5 sm:p-8`}
           >
             <p className="text-[11px] font-semibold tracking-[0.18em] text-accent-text uppercase">
               CodeWalk Agent
@@ -261,7 +261,7 @@ export function ProblemSection() {
             <p className="mt-2 text-2xl font-semibold tracking-tight text-fg">
               CodeWalk Agent sees the project.
             </p>
-            <div className="mt-8 grid h-48 grid-cols-[auto_minmax(2.5rem,1fr)_auto] items-stretch">
+            <div className="mt-8 grid h-48 grid-cols-[auto_minmax(1.25rem,1fr)_auto] items-stretch">
               <div className="flex items-center">
                 <span className="flex items-center gap-2 rounded border border-accent bg-accent-muted px-3 py-2 font-mono text-sm text-fg">
                   <FileCode2 aria-hidden className="size-4 text-accent" /> main.py
@@ -291,7 +291,7 @@ export function ProblemSection() {
                   );
                 })}
               </svg>
-              <ul className="flex h-full flex-col font-mono text-sm">
+              <ul className="flex h-full flex-col font-mono text-xs sm:text-sm">
                 <li className="flex flex-1 items-center text-[11px] tracking-[0.16em] text-fg-subtle uppercase">
                   Project
                 </li>
@@ -342,7 +342,7 @@ export function ContextFlow() {
       title: "Diagnostic",
       body: (
         <p className="flex items-center gap-1.5 text-[13px] text-fg">
-          <CircleX aria-label="Error" className="size-4 text-danger" /> Undefined reference
+          <CircleX aria-label="Error" className="size-4 text-danger" /> Undefined name
           <span className="ml-auto font-mono text-[10px] text-fg-subtle">27:8</span>
         </p>
       ),
@@ -388,7 +388,7 @@ export function ContextFlow() {
           title="One line of code, followed all the way to a fix you can review."
           intro="CodeWalk connects what you are editing with what it means for the rest of the project, then lets AI explain it and propose a change."
         />
-        <ol className="mt-14 grid gap-3 lg:grid-cols-5">
+        <ol className="mt-14 grid grid-cols-1 gap-3 lg:grid-cols-5">
           {steps.map((s, i) => (
             <li key={s.n} className={`${styles.reveal} relative flex flex-col`}>
               <div className="flex items-center gap-2 pb-3">
@@ -456,7 +456,7 @@ function Story({
   flip?: boolean;
 }) {
   return (
-    <article className="grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
+    <article className="grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
       <div className={`${styles.reveal} ${flip ? "lg:order-2" : ""}`}>{visual}</div>
       <div className={`${styles.reveal} ${flip ? "lg:order-1" : ""}`}>
         <Eyebrow>{eyebrow}</Eyebrow>
@@ -478,7 +478,7 @@ function Spotlights() {
         body="As you type, static analysis checks the open file: syntax errors, undefined names and lint findings are underlined in the editor and listed in Problems with their exact location. Nothing is run."
         visual={
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
-            <div className="py-2">
+            <div className={`overflow-x-auto py-2 ${styles.mockScroll}`}>
               <CodeLines
                 lines={AUTH_CODE.slice(9, 13)}
                 start={10}
@@ -486,7 +486,7 @@ function Spotlights() {
                 current={12}
               />
             </div>
-            <ProblemsPanel problems={AUTH_PROBLEMS.filter((p) => p.location !== "1:1")} />
+            <ProblemsPanel problems={AUTH_PROBLEMS.filter((p) => p.location !== "1:22")} />
           </div>
         }
       />
@@ -520,7 +520,7 @@ function Spotlights() {
           <div className="space-y-2 rounded-lg border border-border bg-surface p-4 text-[13px]">
             <p className="flex items-center gap-2 text-fg">
               <CircleX aria-label="Error" className="size-4 text-danger" /> Undefined name
-              ‘session_store’
+              <code className="font-mono">session_store</code>
             </p>
             <p className="pl-6 font-mono text-[11.5px] text-fg-muted">→ services.py · models.py</p>
             <p className="pl-6 text-fg-muted">
@@ -596,7 +596,9 @@ const STEPS = [
 export function HowItWorks() {
   return (
     <section id="how-it-works" aria-labelledby="how-title" className="py-24 sm:py-32">
-      <div className={`${container} grid gap-14 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}>
+      <div
+        className={`${container} grid grid-cols-1 gap-14 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}
+      >
         <div className="lg:sticky lg:top-24 lg:self-start">
           <SectionHeading
             id="how-title"
@@ -702,7 +704,7 @@ export function HumanControl() {
           }
           intro="CodeWalk is not an autonomous coder. The agent reads your project through read-only tools and can only store proposals; applying one always takes your explicit approval."
         />
-        <div className="mt-14 grid items-stretch gap-4 lg:grid-cols-[1fr_auto_1fr]">
+        <div className="mt-14 grid grid-cols-1 items-stretch gap-4 lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {column("AI", ["Understands", "Retrieves", "Explains", "Suggests"], false)}
           <ol
             aria-label="Review flow"
@@ -834,7 +836,7 @@ export function WorkspaceShowcase() {
             </div>
             <AiPanel
               context={["services/billing.py:15", "api/billing.py", "tests/test_billing.py"]}
-              className="border-t border-border xl:border-t-0 xl:border-l"
+              className="border-t border-border md:col-span-2 xl:col-span-1 xl:border-t-0 xl:border-l"
             >
               <p className="rounded bg-accent-muted px-2 py-1.5 text-fg">
                 Is apply_discount correct?
@@ -842,7 +844,7 @@ export function WorkspaceShowcase() {
               <p className="text-fg">
                 Static analysis cannot see this one: it subtracts the percentage as an amount:{" "}
                 <code className="font-mono">total - percent</code>. With total 200 and 10 percent it
-                returns 190, not 180. api/billing.py:31 and tests/test_billing.py:12 call it.
+                returns 190, not 180. api/billing.py:31 and tests/test_billing.py:12 reference it.
               </p>
               <MiniDiff
                 file="services/billing.py"
@@ -877,7 +879,7 @@ const LAYERS: { layer: string; detail: string; tech: string[] }[] = [
   {
     layer: "Code analysis + project intelligence",
     detail: "Diagnostics, symbols, imports, search",
-    tech: ["tree-sitter", "Static analyzers", "Deterministic search"],
+    tech: ["ruff", "TypeScript compiler", "tree-sitter", "sqlglot", "Deterministic search"],
   },
   {
     layer: "AI / RAG / agent workflows",
@@ -902,7 +904,9 @@ export function Architecture() {
       aria-labelledby="arch-title"
       className="border-y border-border bg-surface-sunken py-24 sm:py-32"
     >
-      <div className={`${container} grid gap-14 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}>
+      <div
+        className={`${container} grid grid-cols-1 gap-14 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]`}
+      >
         <SectionHeading
           id="arch-title"
           eyebrow="Technology"
@@ -981,7 +985,9 @@ const FAQS: [string, string][] = [
 export function Faq() {
   return (
     <section id="faq" aria-labelledby="faq-title" className="py-24 sm:py-32">
-      <div className={`${container} grid gap-12 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]`}>
+      <div
+        className={`${container} grid grid-cols-1 gap-12 lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1.3fr)]`}
+      >
         <SectionHeading id="faq-title" eyebrow="FAQ" title="Questions, answered precisely." />
         <div className="divide-y divide-border border-y border-border">
           {FAQS.map(([question, answer], i) => (
@@ -1082,7 +1088,9 @@ export function FinalCta() {
 export function Footer() {
   return (
     <footer className="border-t border-border bg-app">
-      <div className={`${container} grid gap-8 py-12 md:grid-cols-[1fr_auto] md:items-start`}>
+      <div
+        className={`${container} grid grid-cols-1 gap-8 py-12 md:grid-cols-[minmax(0,1fr)_auto] md:items-start`}
+      >
         <div className="max-w-sm">
           <p className="flex items-center gap-2 text-sm font-semibold tracking-tight text-fg">
             <LogoMark className="size-5" /> CodeWalk Agent

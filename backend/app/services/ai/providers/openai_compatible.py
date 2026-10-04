@@ -101,6 +101,15 @@ class OpenAICompatibleProvider:
         status = response.status_code
         request_id = response.headers.get("x-request-id")
         if status == 429:
+            if _is_quota_exhausted(response):
+                # Not a temporary limit: the account has no credit left, so retrying cannot help.
+                logger.warning(
+                    "The OpenAI-compatible provider reports no remaining quota for the configured key"
+                )
+                raise AIProviderError(
+                    "The AI provider account has no remaining credit or quota. Add credit or billing for the "
+                    "server's API key; retrying will not help."
+                )
             raise AIRateLimitedError("The AI provider is rate limiting requests. Try again shortly.")
         if status in (401, 403):
             logger.warning("The OpenAI-compatible provider rejected the configured credential (%s)", status)
@@ -148,3 +157,14 @@ class OpenAICompatibleProvider:
                 "output_tokens": int(usage.get("completion_tokens", 0) or 0),
             },
         )
+
+
+def _is_quota_exhausted(response: httpx.Response) -> bool:
+    """OpenAI answers 429 both for rate limits and for an account without credit (insufficient_quota)."""
+    try:
+        error = response.json().get("error") or {}
+    except (ValueError, AttributeError):
+        return False
+    return "insufficient_quota" in {error.get("type"), error.get("code")} or error.get("code") == (
+        "credit_balance_exhausted"
+    )

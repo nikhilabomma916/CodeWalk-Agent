@@ -266,3 +266,14 @@ def test_query_embeddings_are_cached_and_limited() -> None:
     service.embed_query(user, "another query")
     with pytest.raises(QueryLimitError):
         service.embed_query(user, "a third query")
+
+
+def test_close_releases_the_client_and_stops_requests() -> None:
+    p, seen = provider(ok)
+    assert p.embed(["x"], InputType.DOCUMENT).vectors
+    p.close()
+    p.close()  # idempotent
+    assert p.status().configured is False
+    with pytest.raises(EmbeddingProviderError):
+        p.embed(["y"], InputType.DOCUMENT)
+    assert len(seen) == 1

@@ -89,6 +89,12 @@ class VoyageEmbeddingProvider:
             )
         return EmbeddingStatus(provider=self.name, model=self.model, configured=True)
 
+    def close(self) -> None:
+        """Releases the HTTP connection pool (the provider is unusable afterwards)."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
     def embed(self, texts: list[str], input_type: InputType) -> EmbeddingResult:
         client = self._client
         if client is None:

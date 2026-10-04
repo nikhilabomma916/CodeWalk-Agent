@@ -47,7 +47,7 @@ const CAPABILITIES: Capability[] = [
     summary: "Problems while you type.",
     detail:
       "Static analysis runs as you edit: syntax errors, undefined names and lint findings appear inline and in the Problems panel. Code is analyzed, never executed.",
-    x: 83,
+    x: 80,
     y: 22,
   },
   {
@@ -57,7 +57,7 @@ const CAPABILITIES: Capability[] = [
     summary: "Symbols, imports, relationships.",
     detail:
       "Indexes files, languages, symbols and imports, resolves how files depend on each other, and summarizes architecture and the impact of a change.",
-    x: 94,
+    x: 86,
     y: 55,
   },
   {
@@ -67,7 +67,7 @@ const CAPABILITIES: Capability[] = [
     summary: "Beyond file names.",
     detail:
       "Finds functions, classes, imports, identifiers and text across the project, with a deterministic ranking that explains why each result matched.",
-    x: 77,
+    x: 74,
     y: 88,
   },
   {
@@ -77,7 +77,7 @@ const CAPABILITIES: Capability[] = [
     summary: "Retrieves what a question needs.",
     detail:
       "Code is embedded into PostgreSQL with pgvector; semantic and hybrid search retrieve only the snippets relevant to the question instead of sending the whole project.",
-    x: 23,
+    x: 26,
     y: 88,
   },
   {
@@ -87,7 +87,7 @@ const CAPABILITIES: Capability[] = [
     summary: "Conventions the AI follows.",
     detail:
       "Short notes you save for a project (conventions, decisions, terms) that the agent follows. Text that looks like a credential is refused.",
-    x: 6,
+    x: 14,
     y: 55,
   },
   {
@@ -97,7 +97,7 @@ const CAPABILITIES: Capability[] = [
     summary: "Bounded, tool-using workflows.",
     detail:
       "Ask, review, tests, documentation, refactoring, impact and architecture workflows. The agent reads through read-only tools within step and token limits.",
-    x: 17,
+    x: 20,
     y: 22,
   },
   {
@@ -145,7 +145,7 @@ export function FeatureEcosystem() {
   };
 
   return (
-    <div className="grid items-center gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+    <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
       {/* Diagram (tablet and up). */}
       <div className="relative mx-auto hidden aspect-[1.35] w-full max-w-2xl sm:block">
         <svg
@@ -294,7 +294,7 @@ export function ProjectGraph() {
   const touches = (edge: [string, string]) => edge.includes(selected);
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-center">
+    <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] lg:items-center">
       <div className="relative rounded-lg border border-border bg-surface p-3">
         <p className="absolute top-3 left-4 text-[10px] tracking-[0.16em] text-fg-subtle uppercase">
           Example project relationship
@@ -353,12 +353,12 @@ export function ProjectGraph() {
       <dl
         id={detailId}
         aria-live="polite"
-        className="grid grid-cols-[6.5rem_1fr] gap-x-4 gap-y-3 rounded-lg border border-border bg-surface-sunken p-5 text-sm"
+        className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-4 gap-y-3 rounded-lg border border-border bg-surface-sunken p-5 text-sm [&_dd]:min-w-0 [&_dd]:break-words"
       >
         <dt className="text-xs tracking-wide text-fg-subtle uppercase">File</dt>
-        <dd className="font-mono text-fg">{current.file}</dd>
+        <dd className="font-mono break-all text-fg">{current.file}</dd>
         <dt className="text-xs tracking-wide text-fg-subtle uppercase">Symbol</dt>
-        <dd className="font-mono text-fg">{current.symbol}</dd>
+        <dd className="font-mono break-all text-fg">{current.symbol}</dd>
         <dt className="text-xs tracking-wide text-fg-subtle uppercase">Role</dt>
         <dd className="text-fg-muted">{current.role}</dd>
         <dt className="text-xs tracking-wide text-fg-subtle uppercase">Relationships</dt>

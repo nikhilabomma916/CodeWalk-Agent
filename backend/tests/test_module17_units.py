@@ -251,6 +251,15 @@ def test_openai_provider_maps_failures(response: httpx.Response, error: type[Exc
         provider(lambda _: response).generate_structured(REQUEST)
 
 
+def test_openai_quota_exhaustion_is_not_reported_as_a_temporary_rate_limit() -> None:
+    body = {"error": {"type": "insufficient_quota", "code": "credit_balance_exhausted", "message": "..."}}
+    with pytest.raises(AIProviderError, match="no remaining credit or quota"):
+        provider(lambda _: httpx.Response(429, json=body)).generate_structured(REQUEST)
+    rate_limited = {"error": {"type": "requests", "code": "rate_limit_exceeded"}}
+    with pytest.raises(AIRateLimitedError):
+        provider(lambda _: httpx.Response(429, json=rate_limited)).generate_structured(REQUEST)
+
+
 def test_openai_provider_timeout_and_configuration() -> None:
     def timeout(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("slow", request=request)

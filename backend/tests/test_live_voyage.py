@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import Any
 
 import pytest
 
@@ -31,6 +32,15 @@ def cosine(a: list[float], b: list[float]) -> float:
 def test_live_code_embeddings() -> None:
     provider = create_embedding_provider(make_settings(rag_enabled=True, voyage_api_key=CREDENTIAL))
     assert provider.status().configured
+    try:
+        _check_embeddings(provider)
+    finally:
+        close = getattr(provider, "close", None)
+        if close is not None:
+            close()  # release the connection pool (an unclosed socket fails the run under -W error)
+
+
+def _check_embeddings(provider: Any) -> None:
     documents = provider.embed(
         [
             "def add_numbers(values):\n    return sum(values)\n",
