@@ -7,6 +7,7 @@ import time
 from datetime import UTC, datetime
 
 from app.core.exceptions import AppError
+from app.core.metrics import timed
 from app.services.analysis.analyzers.base import MAX_DIAGNOSTICS, AnalysisContext, AnalyzerOutput
 from app.services.analysis.analyzers.html_analyzer import HtmlAnalyzer
 from app.services.analysis.analyzers.json_analyzer import JsonAnalyzer
@@ -72,6 +73,14 @@ class AnalysisEngine:
         self, source: str, *, language: Language | None = None, file_path: str | None = None
     ) -> AnalysisResult:
         """Run every analyzer registered for the language. Never executes the source."""
+        with timed("code_analysis") as metric:
+            result = self._analyze(source, language=language, file_path=file_path)
+            metric["outcome"] = "ok" if result.success else "partial"
+            return result
+
+    def _analyze(
+        self, source: str, *, language: Language | None = None, file_path: str | None = None
+    ) -> AnalysisResult:
         size = len(source.encode("utf-8"))
         if size > self.max_source_bytes:
             raise SourceTooLargeError(

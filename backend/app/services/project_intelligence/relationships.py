@@ -156,15 +156,40 @@ class JavaScriptImportResolver:
         return None
 
 
+class ImportResolution:
+    """Resolves the imports of a set of project files against each other.
+
+    ``languages`` holds every project path (any of them can be an import target); ``contents`` is
+    consulted only for tsconfig.json / jsconfig.json. Shared by project intelligence and the search
+    index, so both resolve imports identically.
+    """
+
+    def __init__(self, languages: Mapping[str, Language], contents: Mapping[str, str | None]) -> None:
+        paths = list(languages)
+        self.languages = languages
+        self.python = PythonImportResolver(p for p in paths if languages[p] is Language.PYTHON)
+        self.javascript = JavaScriptImportResolver(paths, contents)
+
+    def resolve(self, path: str, record: ImportRecord) -> tuple[str | None, list[str]]:
+        """(``resolved_path`` for the record, every project file the import refers to)."""
+        language = self.languages[path]
+        if language is Language.PYTHON:
+            module_path, submodules = self.python.resolve(path, record)
+            resolved = submodules[0] if submodules and not module_path else module_path
+            return resolved, [t for t in [module_path, *submodules] if t]
+        if language in JS_LANGUAGES:
+            resolved = self.javascript.resolve(path, record.module)
+            return resolved, [resolved] if resolved else []
+        return record.resolved_path, []
+
+
 def build_relationships(
     structures: Mapping[str, FileStructure],
     languages: Mapping[str, Language],
     contents: Mapping[str, str | None],
 ) -> list[Relationship]:
     """Resolve every import in-place (sets ``resolved_path``) and return all relationships."""
-    paths = list(languages)
-    python = PythonImportResolver(p for p in paths if languages[p] is Language.PYTHON)
-    javascript = JavaScriptImportResolver(paths, contents)
+    resolution = ImportResolution(languages, contents)
     relationships: list[Relationship] = []
 
     for path, structure in structures.items():
@@ -191,14 +216,7 @@ def build_relationships(
                     )
                 )
         for record in structure.imports:
-            targets: list[str] = []
-            if language is Language.PYTHON:
-                module_path, submodules = python.resolve(path, record)
-                record.resolved_path = submodules[0] if submodules and not module_path else module_path
-                targets = [t for t in [module_path, *submodules] if t]
-            elif language in JS_LANGUAGES:
-                record.resolved_path = javascript.resolve(path, record.module)
-                targets = [record.resolved_path] if record.resolved_path else []
+            record.resolved_path, targets = resolution.resolve(path, record)
             if targets:
                 for target in dict.fromkeys(targets):
                     if target != path:

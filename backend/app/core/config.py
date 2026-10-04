@@ -57,12 +57,17 @@ class Settings(BaseSettings):
 
     # When None, docs are enabled everywhere except production.
     docs_enabled: bool | None = None
+    # GET /metrics (Prometheus text format; outside /api, so the reverse proxy does not route it).
+    metrics_enabled: bool = True
 
     # PostgreSQL, e.g. postgresql+psycopg://user:password@localhost:5432/codewalk.
     # When unset, the API still serves analysis; persistence endpoints return 503.
     database_url: SecretStr | None = None
     database_pool_size: int = Field(default=5, ge=1, le=100)
     database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    # Longest a single SQL statement may run before PostgreSQL cancels it (the request then fails
+    # with a 503 instead of holding a pooled connection indefinitely). Migrations are not affected.
+    database_statement_timeout_seconds: float = Field(default=30.0, ge=1, le=3600)
 
     # AI assistance (analysis, explanations, fix suggestions). Off unless enabled AND a provider
     # credential is present; deterministic analysis never depends on it.

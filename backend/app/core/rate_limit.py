@@ -1,4 +1,4 @@
-"""In-process sliding-window counter for failed login attempts.
+"""In-process sliding-window counter for login attempts and per-user request limits.
 
 State lives in this process only: with several API workers each keeps its own
 counts (an attacker gets ``workers x limit`` attempts). A shared store such as
@@ -39,14 +39,33 @@ class AttemptLimiter:
                 return None
             return max(1, int(attempts[0] + self.window_seconds - now) + 1)
 
+    def acquire(self, key: str) -> int | None:
+        """Check and record one attempt atomically: None when it is allowed (and now counted),
+        otherwise the seconds until another attempt is allowed (nothing is recorded).
+
+        Use this instead of ``retry_after`` followed by ``record_failure`` wherever every attempt
+        counts: with the two separate calls, simultaneous requests can all pass the check before
+        any of them is recorded, exceeding the limit.
+        """
+        now = time.monotonic()
+        with self._lock:
+            attempts = self._recent(key, now)
+            if len(attempts) >= self.max_attempts:
+                return max(1, int(attempts[0] + self.window_seconds - now) + 1)
+            self._append(key, now)
+            return None
+
     def record_failure(self, key: str) -> None:
         now = time.monotonic()
         with self._lock:
-            if key not in self._attempts and len(self._attempts) >= self.max_keys:
-                # Bound memory: drop the oldest key (dicts keep insertion order).
-                self._attempts.pop(next(iter(self._attempts)))
-            attempts = self._attempts.setdefault(key, deque())
-            attempts.append(now)
+            self._append(key, now)
+
+    def _append(self, key: str, now: float) -> None:
+        if key not in self._attempts and len(self._attempts) >= self.max_keys:
+            # Bound memory: drop the oldest key (dicts keep insertion order).
+            self._attempts.pop(next(iter(self._attempts)))
+        attempts = self._attempts.setdefault(key, deque())
+        attempts.append(now)
 
     def reset(self, key: str) -> None:
         with self._lock:

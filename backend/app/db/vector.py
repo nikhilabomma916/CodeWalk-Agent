@@ -7,6 +7,7 @@ lets reflection (Alembic autogenerate / ``alembic check``) recognise the column.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -16,13 +17,14 @@ from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.types import UserDefinedType
 
 
+# pgvector's text form is a JSON array of numbers, so the C-accelerated json module encodes and
+# decodes it (a 1,024-dimension vector per chunk makes a Python loop the slow part of indexing).
 def to_text(values: Sequence[float]) -> str:
-    return "[" + ",".join(repr(float(v)) for v in values) + "]"
+    return json.dumps(list(map(float, values)), separators=(",", ":"))
 
 
 def from_text(value: str) -> list[float]:
-    body = value.strip()[1:-1]
-    return [float(part) for part in body.split(",")] if body else []
+    return [float(v) for v in json.loads(value)]
 
 
 class Vector(UserDefinedType[list[float]]):

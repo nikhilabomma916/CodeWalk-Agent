@@ -19,14 +19,15 @@ import threading
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import Select, delete, func, select, text
+from sqlalchemy import Select, Table, delete, func, insert, select, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import AppError
+from app.core.metrics import timed
 from app.core.rate_limit import AttemptLimiter
 from app.db.models import CodeChunk, Project, ProjectFile, User
 from app.schemas.retrieval import IndexRunResponse, IndexStatusResponse, RetrievalStatusResponse
@@ -51,6 +52,9 @@ QUERY_CACHE_SIZE = 256
 # Texts embedded per provider call during indexing; each group is committed on its own,
 # so a failure keeps the progress made so far.
 INDEX_GROUP_SIZE = 256
+# Files whose stored vectors are looked up together while planning an indexing run.
+PLAN_BATCH_FILES = 200
+CODE_CHUNKS = cast(Table, CodeChunk.__table__)
 
 
 class IndexRunLimitError(AppError):
@@ -142,9 +146,8 @@ class RetrievalService:
     def start_index_run(self, user: User) -> EmbeddingProvider:
         provider = self.require_provider()
         key = f"rag-index:{user.id}"
-        if (retry_after := self.index_limiter.retry_after(key)) is not None:
+        if (retry_after := self.index_limiter.acquire(key)) is not None:  # every run counts toward the limit
             raise IndexRunLimitError(retry_after)
-        self.index_limiter.record_failure(key)  # every run counts toward the limit
         return provider
 
     def embed_query(self, user: User, query: str) -> list[float]:
@@ -157,10 +160,10 @@ class RetrievalService:
                 self._queries.move_to_end(cache_key)
                 return cached
         key = f"rag-query:{user.id}"
-        if (retry_after := self.query_limiter.retry_after(key)) is not None:
+        if (retry_after := self.query_limiter.acquire(key)) is not None:
             raise QueryLimitError(retry_after)
-        self.query_limiter.record_failure(key)
-        result = provider.embed([cache_key[1]], InputType.QUERY)
+        with timed("rag_query_embedding"):
+            result = provider.embed([cache_key[1]], InputType.QUERY)
         if len(result.vectors) != 1:
             raise EmbeddingMalformedResponseError()
         vector = result.vectors[0]
@@ -208,18 +211,19 @@ class SemanticRetriever:
 
     # --- status --------------------------------------------------------------------------
 
-    def _current_paths(self, project: Project, model: str) -> set[str]:
+    def _current_chunks(self, project: Project, model: str) -> dict[str, int]:
+        """Files with chunks matching their current content, and how many chunks each has."""
         rows = self.session.execute(
-            select(ProjectFile.path)
+            select(ProjectFile.path, func.count())
             .join(CodeChunk, CodeChunk.file_id == ProjectFile.id)
             .where(
                 CodeChunk.project_id == project.id,
                 CodeChunk.embedding_model == model,
                 CodeChunk.content_hash == ProjectFile.content_hash,
             )
-            .distinct()
-        ).scalars()
-        return set(rows)
+            .group_by(ProjectFile.path)
+        ).all()
+        return dict(rows)
 
     def index_status(self, project: Project, index: ProjectIndex) -> IndexStatusResponse:
         indexable = _indexable(index)
@@ -233,17 +237,9 @@ class SemanticRetriever:
                 stale_files=len(indexable),
                 chunks=0,
             )
-        current = self._current_paths(project, model) & indexable.keys()
-        chunks = self.session.execute(
-            select(func.count())
-            .select_from(CodeChunk)
-            .join(ProjectFile, ProjectFile.id == CodeChunk.file_id)
-            .where(
-                CodeChunk.project_id == project.id,
-                CodeChunk.embedding_model == model,
-                CodeChunk.content_hash == ProjectFile.content_hash,
-            )
-        ).scalar_one()
+        counts = self._current_chunks(project, model)
+        current = counts.keys() & indexable.keys()
+        chunks = sum(counts.values())
         return IndexStatusResponse(
             available=self.available,
             model=model,
@@ -257,10 +253,14 @@ class SemanticRetriever:
 
     def index_project(self, project: Project, index: ProjectIndex) -> IndexRunResponse:
         """Embed new and changed files (incremental, bounded per run)."""
+        with timed("rag_index"):
+            return self._index_project(project, index)
+
+    def _index_project(self, project: Project, index: ProjectIndex) -> IndexRunResponse:
         provider = self.service.start_index_run(self.owner)
         model = provider.model
         indexable = _indexable(index)
-        current = self._current_paths(project, model)
+        current = self._current_chunks(project, model).keys()
         records = {
             path: (file_id, digest)
             for path, file_id, digest in self.session.execute(
@@ -276,25 +276,22 @@ class SemanticRetriever:
         budget = self.service.settings.rag_max_chunks_per_run
         planned: list[tuple[str, list[Chunk], dict[str, list[float]]]] = []
         needed_total = 0
-        for path in stale:
-            chunks = chunk_file(indexable[path])
-            if not chunks:
-                continue
-            file_id = records[path][0]
-            reusable = dict(
-                self.session.execute(
-                    select(CodeChunk.chunk_hash, CodeChunk.embedding).where(
-                        CodeChunk.file_id == file_id,
-                        CodeChunk.embedding_model == model,
-                        CodeChunk.chunk_hash.in_([c.hash for c in chunks]),
-                    )
-                ).all()
-            )
-            needed = sum(1 for c in chunks if c.hash not in reusable)
-            if planned and needed_total + needed > budget:
+        full = False
+        for start in range(0, len(stale), PLAN_BATCH_FILES):
+            batch = [(path, chunk_file(indexable[path])) for path in stale[start : start + PLAN_BATCH_FILES]]
+            batch = [(path, chunks) for path, chunks in batch if chunks]
+            stored = self._stored_vectors([records[path][0] for path, _ in batch], model)
+            for path, chunks in batch:
+                vectors = stored.get(records[path][0], {})
+                reusable = {c.hash: vectors[c.hash] for c in chunks if c.hash in vectors}
+                needed = len(chunks) - len(reusable)
+                if planned and needed_total + needed > budget:
+                    full = True
+                    break
+                planned.append((path, chunks, reusable))
+                needed_total += needed
+            if full:
                 break
-            planned.append((path, chunks, reusable))
-            needed_total += needed
 
         embedded = reused = tokens = files_done = 0
         group: list[tuple[str, list[Chunk], dict[str, list[float]]]] = []
@@ -338,6 +335,23 @@ class SemanticRetriever:
             status=status,
         )
 
+    def _stored_vectors(
+        self, file_ids: list[uuid.UUID], model: str
+    ) -> dict[uuid.UUID, dict[str, list[float]]]:
+        """Stored vectors of these files (any content version), by file and chunk hash: chunks whose
+        text did not change keep their vector instead of being embedded again."""
+        stored: dict[uuid.UUID, dict[str, list[float]]] = {}
+        if not file_ids:
+            return stored
+        rows = self.session.execute(
+            select(CodeChunk.file_id, CodeChunk.chunk_hash, CodeChunk.embedding).where(
+                CodeChunk.file_id.in_(file_ids), CodeChunk.embedding_model == model
+            )
+        ).all()
+        for file_id, chunk_hash, vector in rows:
+            stored.setdefault(file_id, {})[chunk_hash] = vector
+        return stored
+
     def _write_group(
         self,
         project: Project,
@@ -350,7 +364,8 @@ class SemanticRetriever:
         vectors: list[list[float]] = []
         tokens = 0
         if texts:
-            result = provider.embed(texts, InputType.DOCUMENT)
+            with timed("rag_document_embedding"):
+                result = provider.embed(texts, InputType.DOCUMENT)
             if len(result.vectors) != len(texts):
                 raise EmbeddingMalformedResponseError(
                     "The embedding provider returned the wrong number of vectors."
@@ -358,32 +373,42 @@ class SemanticRetriever:
             vectors, tokens = result.vectors, result.total_tokens
         fresh = iter(vectors)
         reused = 0
+        rows: list[dict[str, Any]] = []
         for path, chunks, reusable in group:
             file_id, digest = records[path]
-            self.session.execute(
-                delete(CodeChunk).where(CodeChunk.file_id == file_id, CodeChunk.embedding_model == model)
-            )
             for chunk in chunks:
                 vector = reusable.get(chunk.hash)
                 if vector is None:
                     vector = next(fresh)
                 else:
                     reused += 1
-                self.session.add(
-                    CodeChunk(
-                        project_id=project.id,
-                        file_id=file_id,
-                        content_hash=digest,
-                        chunk_hash=chunk.hash,
-                        chunk_index=chunk.index,
-                        start_line=chunk.start_line,
-                        end_line=chunk.end_line,
-                        symbol_name=chunk.symbol_name,
-                        symbol_kind=chunk.symbol_kind,
-                        embedding_model=model,
-                        embedding=vector,
-                    )
+                rows.append(
+                    {
+                        "id": uuid.uuid4(),
+                        "project_id": project.id,
+                        "file_id": file_id,
+                        "content_hash": digest,
+                        "chunk_hash": chunk.hash,
+                        "chunk_index": chunk.index,
+                        "start_line": chunk.start_line,
+                        "end_line": chunk.end_line,
+                        "symbol_name": chunk.symbol_name,
+                        "symbol_kind": chunk.symbol_kind,
+                        "embedding_model": model,
+                        "embedding": vector,
+                    }
                 )
+        # The group's files are replaced together: one DELETE, then batched INSERTs, one commit.
+        self.session.execute(
+            delete(CodeChunk).where(
+                CodeChunk.file_id.in_([records[path][0] for path, _, _ in group]),
+                CodeChunk.embedding_model == model,
+            )
+        )
+        if rows:
+            # Core insert on the table: one batched statement (the ORM bulk path splits rows into
+            # separate statements whenever which values are None changes, e.g. per symbol chunk).
+            self.session.execute(insert(CODE_CHUNKS), rows)
         self.session.commit()
         return len(texts), reused, tokens
 

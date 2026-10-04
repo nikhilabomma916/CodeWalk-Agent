@@ -122,6 +122,10 @@ def test_backend_health_through_proxy() -> None:
         missing = client.get(f"{API}/no-such-route")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "not_found"
+        # Backend metrics are served outside /api and only on the internal network (not proxied).
+        exposed = client.get(f"{BASE_URL}/metrics")
+        assert "codewalk_http_request_duration_seconds" not in exposed.text
+        assert client.get(f"{API}/metrics").status_code == 404
 
 
 def test_authentication_and_origin_checks(account: tuple[httpx.Client, str, str]) -> None:

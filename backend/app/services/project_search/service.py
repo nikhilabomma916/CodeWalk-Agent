@@ -13,16 +13,20 @@ results and says so in ``warnings``.
 
 from __future__ import annotations
 
+import heapq
+import logging
 import posixpath
+import time
 import uuid
-from collections.abc import Hashable, Iterator
-from typing import TYPE_CHECKING
+from collections.abc import Callable, Hashable, Iterator
+from typing import TYPE_CHECKING, NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError
+from app.core.metrics import METRICS, timed
 from app.db.models import Project, ProjectFile, User
 from app.repositories.files import FileRepository
 from app.schemas.search import (
@@ -36,16 +40,26 @@ from app.schemas.search import (
     Snippet,
     SnippetRequest,
 )
-from app.services.project_intelligence.models import CodeSymbol, SymbolKind
-from app.services.project_intelligence.service import ProjectIntelligenceService
+from app.services.languages import detect_language
+from app.services.project_intelligence.models import CodeSymbol, FileStructure, SymbolKind
+from app.services.project_intelligence.project_analyzer import STRUCTURE_LANGUAGES
+from app.services.project_intelligence.service import stored_structure
 from app.services.project_search import ranking
-from app.services.project_search.index import IndexCache, IndexedFile, ProjectIndex, fingerprint_of
+from app.services.project_search.index import (
+    IndexCache,
+    IndexedFile,
+    LoadedFile,
+    ProjectIndex,
+    fingerprint_of,
+)
 from app.services.projects import ProjectService
 from app.services.retrieval import fusion
 from app.services.retrieval.base import RetrievalError
 
 if TYPE_CHECKING:
     from app.services.retrieval.service import SemanticHit, SemanticRetriever
+
+logger = logging.getLogger(__name__)
 
 MAX_SNIPPET_LINES = 12
 MAX_LINE_CHARS = 300
@@ -76,6 +90,30 @@ def make_snippet(
     return Snippet(file_path=file.path, start_line=start, end_line=end, lines=lines, truncated=truncated)
 
 
+class Candidate(NamedTuple):
+    """A deterministic match before its result is built: ranking needs only the sort key, and the
+    full result (snippet, related symbols) is built only for matches that are returned."""
+
+    key: tuple[float, str, int]
+    match_type: MatchType
+    build: Callable[[], SearchResult]
+
+
+def loaded_file(record: ProjectFile) -> LoadedFile:
+    """A stored file's content and structure for the search index. The structure comes from the
+    per-file cache and is written back to the record when it had to be extracted (the caller commits)."""
+    language = detect_language(record.path)
+    structure = FileStructure()
+    if record.content is not None and language in STRUCTURE_LANGUAGES:
+        try:
+            structure = stored_structure(record, language)
+        except Exception:
+            logger.exception("Structure extraction crashed for a %s file", language.value)
+    return LoadedFile(
+        path=record.path, content_hash=record.content_hash, content=record.content, structure=structure
+    )
+
+
 def related_symbols(file: IndexedFile, symbol: CodeSymbol | None) -> list[str]:
     if symbol is None:
         names = [s.qualified_name for s in file.symbols if s.parent is None]
@@ -104,20 +142,41 @@ class ProjectSearchService:
     # --- index ---------------------------------------------------------------------------
 
     def index_for(self, project: Project) -> ProjectIndex:
-        pairs = self.session.execute(
-            select(ProjectFile.path, ProjectFile.content_hash).where(ProjectFile.project_id == project.id)
-        ).all()
-        fingerprint = fingerprint_of([(path, digest) for path, digest in pairs])
+        hashes: dict[str, str | None] = dict(
+            self.session.execute(
+                select(ProjectFile.path, ProjectFile.content_hash)
+                .where(ProjectFile.project_id == project.id)
+                .order_by(ProjectFile.path)
+            ).all()
+        )
+        fingerprint = fingerprint_of(list(hashes.items()))
         cached = self.cache.get(project.id, fingerprint)
         if cached is not None:
             return cached
-        records = self.files.list_all(project.id)
-        structure = ProjectIntelligenceService(self.session, self.settings, self.owner).structure_of(
-            project, records
-        )
+        # Reuse the previous index of this project: only new and changed files are read and parsed.
+        started = time.perf_counter()
+        previous = self.cache.latest(project.id)
+        stale = previous.stale_paths(hashes) if previous is not None else list(hashes)
+        if previous is None or len(stale) > len(hashes) // 2:
+            previous = None
+            loaded = {record.path: loaded_file(record) for record in self.files.list_all(project.id)}
+            hashes = {path: file.content_hash for path, file in loaded.items()}
+        else:
+            loaded = {
+                record.path: loaded_file(record) for record in self.files.list_by_paths(project.id, stale)
+            }
+            # A file changed or deleted after the hash query is indexed as it was read.
+            for path in stale:
+                if path in loaded:
+                    hashes[path] = loaded[path].content_hash
+                else:
+                    del hashes[path]
         self.session.commit()  # keep structures computed for changed files in the per-file cache
-        index = ProjectIndex.build(structure, {r.path: r.content for r in records})
-        self.cache.put(project.id, fingerprint, index)
+        index = ProjectIndex.assemble(hashes, loaded, previous)
+        self.cache.put(project.id, index.fingerprint, index)
+        METRICS.observe(
+            "search_index_build", time.perf_counter() - started, "full" if previous is None else "incremental"
+        )
         return index
 
     def project_index(self, project_id: uuid.UUID) -> tuple[Project, ProjectIndex]:
@@ -127,6 +186,12 @@ class ProjectSearchService:
     # --- search --------------------------------------------------------------------------
 
     def search(self, project_id: uuid.UUID, request: SearchRequest) -> SearchResponse:
+        with timed("search") as metric:
+            response = self._search(project_id, request)
+            metric["outcome"] = response.mode_used.value
+            return response
+
+    def _search(self, project_id: uuid.UUID, request: SearchRequest) -> SearchResponse:
         project, index = self.project_index(project_id)
         query = request.query.strip()
         query_terms = ranking.terms(query)
@@ -139,25 +204,31 @@ class ProjectSearchService:
                 return ranking.CURRENT_FILE_BONUS
             return ranking.RELATED_FILE_BONUS if path in related else 0
 
-        allowed = set(request.filters.match_types or MatchType)
-        candidates: list[SearchResult] = []
-        for file in self._filtered_files(index, request):
-            for result in self._match_file(file, query, query_terms, request, bonus(file.path)):
-                if result.match_type in allowed:
-                    candidates.append(result)
-            if len(candidates) >= MAX_CANDIDATES:
-                break
-        candidates.sort(key=lambda r: (-r.score, r.file_path, r.line or 0))
+        def deterministic() -> tuple[list[SearchResult], int]:
+            """The best matches in every file (the top MAX_CANDIDATES are kept, so a strong match in a
+            late file is never lost), built for as many as can be used, and the number kept."""
+            allowed = set(request.filters.match_types or MatchType)
+            found = (
+                candidate
+                for file in self._filtered_files(index, request)
+                for candidate in self._match_file(file, query, query_terms, request, bonus(file.path))
+                if candidate.match_type in allowed
+            )
+            best = heapq.nsmallest(MAX_CANDIDATES, found, key=lambda candidate: candidate.key)
+            return [c.build() for c in best[: max(request.limit, FUSE_DETERMINISTIC)]], len(best)
 
         warnings: list[str] = []
 
-        def respond(results: list[SearchResult], mode_used: SearchMode, description: str) -> SearchResponse:
+        def respond(
+            results: list[SearchResult], mode_used: SearchMode, description: str, total: int | None = None
+        ) -> SearchResponse:
+            total = len(results) if total is None else total
             return SearchResponse(
                 query=query,
                 terms=query_terms,
                 results=results[: request.limit],
-                total=len(results),
-                truncated=len(results) > request.limit,
+                total=total,
+                truncated=total > request.limit,
                 indexed_files=len(index.files),
                 ranking=description,
                 mode=request.mode,
@@ -166,14 +237,17 @@ class ProjectSearchService:
             )
 
         if request.mode is SearchMode.DETERMINISTIC:
-            return respond(candidates, SearchMode.DETERMINISTIC, ranking.RANKING_DESCRIPTION)
+            results, total = deterministic()
+            return respond(results, SearchMode.DETERMINISTIC, ranking.RANKING_DESCRIPTION, total)
 
+        # Deterministic matching runs only when its results are used: hybrid fusion, or the fallback.
         semantic = self._semantic_results(project, index, query, request, warnings)
         if semantic is None:
-            return respond(candidates, SearchMode.DETERMINISTIC, ranking.RANKING_DESCRIPTION)
+            results, total = deterministic()
+            return respond(results, SearchMode.DETERMINISTIC, ranking.RANKING_DESCRIPTION, total)
         if request.mode is SearchMode.SEMANTIC:
             return respond(semantic, SearchMode.SEMANTIC, self._semantic_description())
-        return respond(self._fuse(candidates, semantic), SearchMode.HYBRID, fusion.DESCRIPTION)
+        return respond(self._fuse(deterministic()[0], semantic), SearchMode.HYBRID, fusion.DESCRIPTION)
 
     # --- semantic and hybrid (Module 10) -------------------------------------------------
 
@@ -297,7 +371,7 @@ class ProjectSearchService:
 
     def _match_file(
         self, file: IndexedFile, query: str, query_terms: list[str], request: SearchRequest, bonus: int
-    ) -> Iterator[SearchResult]:
+    ) -> Iterator[Candidate]:
         symbol_type = request.filters.symbol_type
         symbol_lines: set[int] = set()
 
@@ -310,30 +384,35 @@ class ProjectSearchService:
             line: int | None = None,
             end_line: int | None = None,
             column: int | None = None,
-        ) -> SearchResult:
-            snippet = None
-            if line is not None:
-                end = end_line if symbol is not None and end_line else line + 3
-                start = line if symbol is not None else max(1, line - 2)
-                snippet = make_snippet(file, start, end)
-            return SearchResult(
-                file_path=file.path,
-                symbol_name=symbol.name if symbol else None,
-                symbol_type=symbol.kind if symbol else None,
-                qualified_name=symbol.qualified_name if symbol else None,
-                language=file.language,
-                line=line,
-                end_line=end_line,
-                column=column,
-                score=ranking.score(match_type, share, bonus),
-                score_details=ScoreDetails(
-                    base=ranking.BASE[match_type], coverage=round(share, 3), context_bonus=bonus
-                ),
-                match_type=match_type,
-                match_reason=reason,
-                snippet=snippet,
-                related_symbols=related_symbols(file, symbol),
-            )
+        ) -> Candidate:
+            score = ranking.score(match_type, share, bonus)
+
+            def build() -> SearchResult:
+                snippet = None
+                if line is not None:
+                    end = end_line if symbol is not None and end_line else line + 3
+                    start = line if symbol is not None else max(1, line - 2)
+                    snippet = make_snippet(file, start, end)
+                return SearchResult(
+                    file_path=file.path,
+                    symbol_name=symbol.name if symbol else None,
+                    symbol_type=symbol.kind if symbol else None,
+                    qualified_name=symbol.qualified_name if symbol else None,
+                    language=file.language,
+                    line=line,
+                    end_line=end_line,
+                    column=column,
+                    score=score,
+                    score_details=ScoreDetails(
+                        base=ranking.BASE[match_type], coverage=round(share, 3), context_bonus=bonus
+                    ),
+                    match_type=match_type,
+                    match_reason=reason,
+                    snippet=snippet,
+                    related_symbols=related_symbols(file, symbol),
+                )
+
+            return Candidate((-score, file.path, line or 0), match_type, build)
 
         # Symbols (functions, classes, methods, ...) from project intelligence.
         for symbol in file.symbols:
@@ -381,14 +460,32 @@ class ProjectSearchService:
             return
         target = ranking.compact(query)
         phrase = query.lower()
+        # Whole-file pre-check (C-speed string operations): a line can only match if the file as a
+        # whole contains the phrase, every term, or the compacted identifier. Files that cannot
+        # match skip the per-line loop; results are identical.
+        whole = "\n".join(file.lines).lower()
+        if not (
+            phrase in whole
+            or (query_terms and all(t in whole for t in query_terms))
+            or (target in ranking.compact(whole) if target else True)
+        ):
+            return
         found = 0
         for number, text in enumerate(file.lines, start=1):
             if found >= MAX_TEXT_MATCHES_PER_FILE:
                 break
             if number in symbol_lines:
                 continue
-            identifier = next(
-                (m for m in ranking.IDENTIFIER.finditer(text) if ranking.compact(m.group()) == target), None
+            lowered = text.lower()
+            # An identifier compacts to the target only if the target appears in the line once
+            # underscores are removed: check that (C-speed) before running the identifier regex.
+            identifier = (
+                next(
+                    (m for m in ranking.IDENTIFIER.finditer(text) if ranking.compact(m.group()) == target),
+                    None,
+                )
+                if not target or target in lowered.replace("_", "")
+                else None
             )
             if identifier is not None:
                 found += 1
@@ -400,7 +497,6 @@ class ProjectSearchService:
                     column=identifier.start() + 1,
                 )
                 continue
-            lowered = text.lower()
             if phrase in lowered or (query_terms and all(t in lowered for t in query_terms)):
                 found += 1
                 position = lowered.find(query_terms[0] if query_terms else phrase)

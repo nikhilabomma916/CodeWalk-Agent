@@ -18,6 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.core.audit import audit
 from app.core.exceptions import error_response
 from app.core.logging import request_id_var
+from app.core.metrics import METRICS
 
 logger = logging.getLogger("app.access")
 error_logger = logging.getLogger("app.errors")
@@ -37,6 +38,19 @@ API_CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 'none'; base-
 # The interactive docs pages load their own scripts and styles; they keep the browser default.
 _DOCS_PATHS = ("/docs", "/redoc")
 HSTS_VALUE = "max-age=31536000; includeSubDomains"
+_METRIC_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+
+
+def route_label(scope: Scope, api_prefix: str) -> str:
+    """The matched route's template (e.g. ``/api/v1/projects/{project_id}``), never the raw path:
+    metric labels stay bounded and carry no ids."""
+    template = getattr(scope.get("route"), "path", None)
+    if not isinstance(template, str):
+        return "unmatched"
+    # FastAPI reports routes of an included router relative to the include's prefix.
+    if scope.get("path", "").startswith(api_prefix) and not template.startswith(api_prefix):
+        template = api_prefix + template
+    return template
 
 
 class RequestContextMiddleware:
@@ -98,13 +112,20 @@ class RequestContextMiddleware:
             response = error_response(500, "internal_error", "An unexpected error occurred.")
             await response(scope, receive, send_wrapper)
         finally:
-            duration_ms = (time.perf_counter() - started) * 1000
+            duration = time.perf_counter() - started
             logger.info(
                 "%s %s -> %d (%.1f ms)",
                 scope.get("method"),
                 scope.get("path"),
                 status_code,
-                duration_ms,
+                duration * 1000,
+            )
+            method = scope.get("method", "")
+            METRICS.observe_request(
+                method if method in _METRIC_METHODS else "OTHER",
+                route_label(scope, self.api_prefix),
+                status_code,
+                duration,
             )
             request_id_var.reset(token)
 

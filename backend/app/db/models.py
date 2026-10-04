@@ -20,6 +20,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
     true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -254,6 +255,11 @@ class ActivityEvent(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     __table_args__ = (
         Index("ix_activity_events_user_id_created_at", "user_id", "created_at"),
         Index("ix_activity_events_project_id_created_at", "project_id", "created_at"),
+        # For ON DELETE SET NULL when a file or an analysis is deleted (analyses are pruned on save).
+        Index("ix_activity_events_file_id", "file_id", postgresql_where=text("file_id IS NOT NULL")),
+        Index(
+            "ix_activity_events_analysis_id", "analysis_id", postgresql_where=text("analysis_id IS NOT NULL")
+        ),
     )
 
 
