@@ -3,6 +3,22 @@
 What a developer sees in the Coding workspace. Everything AI-generated is a proposal or advice: nothing
 changes a file until the developer chooses to apply it.
 
+## Upload a folder from your computer (Module 18)
+
+**Upload folder** (Coding start screen, or the header icon) copies a local folder into a new server
+project, so search, project intelligence, Insights, and the agent can work on it. "Open local folder"
+still edits a folder in place in the browser, but those server features need an uploaded project.
+
+- Pick a folder; the dialog shows how many files will be uploaded and which are skipped before
+  anything is sent: dependency and build folders (node_modules, .git, …), `.env` and other credential
+  files, binary files, and files over 2 MB. The project name defaults to the folder name.
+- Files are sent in batches (`POST /projects/{id}/files/import`, at most 100 files and about 4 MB per
+  request) with a progress bar; **Cancel upload** stops between batches and keeps what was uploaded.
+- The server checks every file again (unsafe paths, credentials, ignored folders, size, the project
+  file limit) and never overwrites an existing file; skipped files are listed with the reason.
+- **Open project** opens it in the workspace and analyzes it (files, symbols, imports). Code is
+  analyzed, never executed.
+
 ## Agent panel (bottom panel → Agent)
 
 - **Workflow selector**: Ask / fix, Code review, Generate tests, Write documentation, Refactor

@@ -45,6 +45,10 @@ export function useCodingDeepLink(): { error: string | null; dismiss(): void } {
         if (openProjectId.current !== projectId) {
           const project = await getProject(projectId);
           if (cancelled) return;
+          if (project.origin === "upload") {
+            router.replace(`/app/uploads/${encodeURIComponent(project.id)}`);
+            return;
+          }
           if (!(await actions.openServerProject(project))) {
             router.replace(CODING_PATH);
             return;

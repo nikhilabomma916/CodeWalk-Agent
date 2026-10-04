@@ -12,7 +12,7 @@ from app.api.deps import (
     ProjectServiceDep,
     SettingsDep,
 )
-from app.db.models import AnalysisType
+from app.db.models import AnalysisType, ProjectOrigin
 from app.schemas.analysis import AnalysisRecord
 from app.schemas.common import Page
 from app.schemas.errors import ErrorResponse
@@ -53,8 +53,16 @@ def create_project(data: ProjectCreate, service: ProjectServiceDep) -> ProjectRe
 
 
 @router.get("", response_model=Page[ProjectResponse], summary="List projects (most recently updated first)")
-def list_projects(service: ProjectServiceDep, limit: Limit = 50, offset: Offset = 0) -> Page[ProjectResponse]:
-    items, total = service.list(limit=limit, offset=offset)
+def list_projects(
+    service: ProjectServiceDep,
+    limit: Limit = 50,
+    offset: Offset = 0,
+    origin: Annotated[
+        ProjectOrigin | None,
+        Query(description="Only workspace projects, or only folders uploaded from a computer."),
+    ] = None,
+) -> Page[ProjectResponse]:
+    items, total = service.list(limit=limit, offset=offset, origin=origin)
     return Page(items=service.responses(items), total=total, limit=limit, offset=offset)
 
 

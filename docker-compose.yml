@@ -23,9 +23,15 @@ x-dev-backend: &dev-backend
     CODEWALK_LOG_LEVEL: ${CODEWALK_LOG_LEVEL:-INFO}
     # Optional; the app runs without them and reports AI/retrieval as unavailable.
     CODEWALK_AI_ENABLED: ${CODEWALK_AI_ENABLED:-false}
+    CODEWALK_AI_PROVIDER: ${CODEWALK_AI_PROVIDER:-}
+    CODEWALK_AI_MODEL: ${CODEWALK_AI_MODEL:-}
     ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    CODEWALK_AI_BASE_URL: ${CODEWALK_AI_BASE_URL:-}
     CODEWALK_AI_API_KEY: ${CODEWALK_AI_API_KEY:-}
     RAG_ENABLED: ${RAG_ENABLED:-false}
+    RAG_EMBEDDING_PROVIDER: ${RAG_EMBEDDING_PROVIDER:-}
+    RAG_EMBEDDING_MODEL: ${RAG_EMBEDDING_MODEL:-}
     VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
     # Bind-mounted sources on Windows/macOS do not deliver file events: poll for reloads.
     WATCHFILES_FORCE_POLLING: "true"

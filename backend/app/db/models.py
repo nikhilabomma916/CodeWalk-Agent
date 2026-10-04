@@ -114,6 +114,14 @@ class AuthSession(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     user: Mapped[User] = relationship()
 
 
+class ProjectOrigin(StrEnum):
+    """Where a project came from: created in the workspace (Coding/Projects) or uploaded from a local
+    folder (Module 18). Uploaded projects are listed only in the Uploads area and analyzed read-only."""
+
+    WORKSPACE = "workspace"
+    UPLOAD = "upload"
+
+
 class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "projects"
 
@@ -123,6 +131,12 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Folder relative to CODEWALK_WORKSPACE_ROOT when the project is linked to a
     # server directory; None for projects whose files live only in the database.
     root_path: Mapped[str | None] = mapped_column(String(MAX_PATH_LENGTH))
+    origin: Mapped[ProjectOrigin] = mapped_column(
+        _enum(ProjectOrigin, "project_origin"),
+        nullable=False,
+        default=ProjectOrigin.WORKSPACE,
+        server_default=ProjectOrigin.WORKSPACE.value,
+    )
 
     files: Mapped[list[ProjectFile]] = relationship(
         back_populates="project", cascade="all, delete-orphan", passive_deletes=True

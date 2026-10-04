@@ -37,6 +37,7 @@ from app.db.models import (
     AgentAction,
     AgentRun,
     AgentRunStatus,
+    ProjectOrigin,
     User,
 )
 from app.schemas.agent import (
@@ -249,8 +250,12 @@ class AgentService:
         calls: list[ToolCallRecord] = []
         warnings: list[str] = []
         turns: list[prompts.ToolTurn] = []
+        # Uploaded projects (Module 18) are analyzed read-only: the agent answers but proposes nothing.
+        read_only = project.origin is ProjectOrigin.UPLOAD
         policy = ToolPolicy(
-            max_actions=self.settings.agent_max_actions, max_tool_calls=self.settings.agent_max_tool_calls
+            max_actions=0 if read_only else self.settings.agent_max_actions,
+            max_tool_calls=self.settings.agent_max_tool_calls,
+            read_only=read_only,
         )
         # The developer's saved notes for this project (ownership was checked above).
         memory = MemoryService(self.session, self.settings, self.owner).for_prompt(project.id)
@@ -302,7 +307,7 @@ class AgentService:
                 project.name,
                 turns,
                 steps_left=max_steps - step,
-                actions_left=self.settings.agent_max_actions - policy.actions,
+                actions_left=policy.max_actions - policy.actions,
                 answer_now=answer_now,
                 notes=notes,
             )

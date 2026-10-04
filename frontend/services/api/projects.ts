@@ -17,6 +17,8 @@ const projectSchema = z.object({
   description: z.string().nullable(),
   root_path: z.string().nullable(),
   read_only: z.boolean(),
+  /** "upload": a folder uploaded from the developer's computer (Uploads area, analyzed read-only). */
+  origin: z.enum(["workspace", "upload"]).default("workspace"),
   created_at: z.string(),
   updated_at: z.string(),
   stats: projectStatsSchema,
@@ -51,8 +53,17 @@ export type WorkspaceFolders = z.infer<typeof workspaceSchema>;
 
 const noContent = z.undefined();
 
-export async function listProjects(client: ApiClient = apiClient): Promise<ServerProject[]> {
-  const { data } = await client.request("/projects?limit=200", { schema: page(projectSchema) });
+export type ProjectOrigin = ServerProject["origin"];
+
+/** The user's projects; `origin` limits the list to workspace projects or uploaded folders. */
+export async function listProjects(
+  options: { origin?: ProjectOrigin } = {},
+  client: ApiClient = apiClient,
+): Promise<ServerProject[]> {
+  const query = options.origin ? `&origin=${options.origin}` : "";
+  const { data } = await client.request(`/projects?limit=200${query}`, {
+    schema: page(projectSchema),
+  });
   return data.items;
 }
 
@@ -65,7 +76,7 @@ export async function getProject(
 }
 
 export async function createProject(
-  input: { name: string; description?: string; rootPath?: string },
+  input: { name: string; description?: string; rootPath?: string; origin?: ProjectOrigin },
   client: ApiClient = apiClient,
 ): Promise<ServerProject> {
   const { data } = await client.request("/projects", {
@@ -74,6 +85,7 @@ export async function createProject(
       name: input.name,
       description: input.description || undefined,
       root_path: input.rootPath,
+      origin: input.origin,
     },
     schema: projectSchema,
   });
@@ -147,6 +159,30 @@ export async function createFile(
     schema: fileSaveSchema,
   });
   return data.file;
+}
+
+const importResultSchema = z.object({
+  created: z.array(fileMetadataSchema),
+  skipped: z.array(z.object({ path: z.string(), reason: z.string(), message: z.string() })),
+});
+
+export type ImportResult = z.infer<typeof importResultSchema>;
+
+/** Uploads one batch (at most 100 files) of a local folder into a server project. */
+export async function importFiles(
+  projectId: string,
+  files: { path: string; content: string }[],
+  options: { signal?: AbortSignal } = {},
+  client: ApiClient = apiClient,
+): Promise<ImportResult> {
+  const { data } = await client.request(`/projects/${encodeURIComponent(projectId)}/files/import`, {
+    method: "POST",
+    body: { files },
+    schema: importResultSchema,
+    signal: options.signal,
+    timeoutMs: 120_000,
+  });
+  return data;
 }
 
 export async function updateFileContent(
