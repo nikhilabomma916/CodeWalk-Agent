@@ -47,7 +47,7 @@ class AnthropicProvider:
         api_key: str | None,
         model: str | None = None,
         timeout_seconds: float = 90.0,
-        max_retries: int = 1,
+        max_retries: int = 0,  # no automatic retries: the user retries (Module 23)
         http_client: anthropic.DefaultHttpxClient | None = None,
     ) -> None:
         self.model = model or DEFAULT_MODEL

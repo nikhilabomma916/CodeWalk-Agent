@@ -19,6 +19,8 @@ from typing import Protocol
 from sqlalchemy import Column, DateTime, Engine, MetaData, String, Table, delete, func, insert, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.metrics import METRICS
+
 logger = logging.getLogger(__name__)
 
 # Rows older than this belong to no window any more (the longest configurable window is one day).
@@ -33,7 +35,14 @@ RATE_LIMIT_EVENTS = Table(
 
 
 class RateLimiter(Protocol):
-    """What callers use: both limiters below implement it."""
+    """What callers use: both limiters below implement it.
+
+    ``retry_after`` only inspects: it records nothing and counts no metric. ``acquire`` counts a
+    refusal in ``codewalk_rate_limited_total``; a caller that refuses a request on the strength of
+    ``retry_after`` counts it itself with ``METRICS.count_rate_limited(limiter.name)``.
+    """
+
+    name: str  # metrics label: a fixed limit name, never a key
 
     def retry_after(self, key: str) -> int | None: ...
 
@@ -43,7 +52,10 @@ class RateLimiter(Protocol):
 
 
 class AttemptLimiter:
-    def __init__(self, max_attempts: int, window_seconds: float, *, max_keys: int = 100_000) -> None:
+    def __init__(
+        self, max_attempts: int, window_seconds: float, *, max_keys: int = 100_000, name: str = "limit"
+    ) -> None:
+        self.name = name  # metrics label: a fixed limit name, never a key
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.max_keys = max_keys
@@ -61,7 +73,7 @@ class AttemptLimiter:
         return attempts
 
     def retry_after(self, key: str) -> int | None:
-        """Seconds until another attempt is allowed, or None when not limited."""
+        """Seconds until another attempt is allowed, or None when not limited (inspection only)."""
         now = time.monotonic()
         with self._lock:
             attempts = self._recent(key, now)
@@ -80,10 +92,12 @@ class AttemptLimiter:
         now = time.monotonic()
         with self._lock:
             attempts = self._recent(key, now)
-            if len(attempts) >= self.max_attempts:
-                return max(1, int(attempts[0] + self.window_seconds - now) + 1)
-            self._append(key, now)
-            return None
+            if len(attempts) < self.max_attempts:
+                self._append(key, now)
+                return None
+            retry = max(1, int(attempts[0] + self.window_seconds - now) + 1)
+        METRICS.count_rate_limited(self.name)
+        return retry
 
     def record_failure(self, key: str) -> None:
         now = time.monotonic()
@@ -121,7 +135,8 @@ class DatabaseAttemptLimiter:
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.namespace = namespace
-        self.fallback = AttemptLimiter(max_attempts, window_seconds)
+        self.name = namespace
+        self.fallback = AttemptLimiter(max_attempts, window_seconds, name=namespace)
 
     def _hash(self, key: str) -> str:
         return hashlib.sha256(f"{self.namespace}:{key}".encode("utf-8", "surrogatepass")).hexdigest()
@@ -165,6 +180,7 @@ class DatabaseAttemptLimiter:
                     )
                 ).one()
                 if count >= self.max_attempts:
+                    METRICS.count_rate_limited(self.namespace)
                     return max(1, int((oldest + window - now).total_seconds()) + 1)
                 connection.execute(insert(RATE_LIMIT_EVENTS).values(key_hash=key_hash, occurred_at=now))
                 if secrets.randbelow(200) == 0:  # occasionally drop every key's stale rows
@@ -192,5 +208,5 @@ def make_limiter(
 ) -> RateLimiter:
     """Shared through PostgreSQL when a database is configured, else in-process."""
     if engine is None:
-        return AttemptLimiter(max_attempts, window_seconds)
+        return AttemptLimiter(max_attempts, window_seconds, name=namespace)
     return DatabaseAttemptLimiter(engine, max_attempts, window_seconds, namespace=namespace)

@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.core.config import AI_PROVIDERS, Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.logging import request_id_var
-from app.core.metrics import timed
+from app.core.metrics import METRICS, timed
 from app.core.rate_limit import AttemptLimiter, RateLimiter
 from app.db.models import ActivityType, Analysis, AnalysisStatus, AnalysisType, Project, ProjectFile, User
 from app.repositories.analyses import AnalysisRepository
@@ -57,6 +57,7 @@ from app.services.ai import edits as edit_rules
 from app.services.ai.base import (
     AIContextTooLargeError,
     AIDisabledError,
+    AIError,
     AIMalformedResponseError,
     AINotConfiguredError,
     AIProvider,
@@ -170,18 +171,40 @@ class AIService:
             raise AIContextTooLargeError(
                 f"The request is larger than the {self.settings.ai_max_input_chars} character AI input limit."
             )
-        with timed("ai_provider_call"):
-            result = provider.generate_structured(
-                StructuredRequest(
-                    system=system,
-                    user=user,
-                    schema=output_schema(output),
-                    max_tokens=self.settings.ai_max_tokens,
-                    timeout_seconds=min(
-                        timeout_seconds or self.settings.ai_timeout_seconds, self.settings.ai_timeout_seconds
-                    ),
-                    effort=self.settings.ai_effort,
+        started = time.perf_counter()
+        outcome = "error"
+        usage: dict[str, int] | None = None
+        try:
+            with timed("ai_provider_call"):
+                result = provider.generate_structured(
+                    StructuredRequest(
+                        system=system,
+                        user=user,
+                        schema=output_schema(output),
+                        max_tokens=self.settings.ai_max_tokens,
+                        timeout_seconds=min(
+                            timeout_seconds or self.settings.ai_timeout_seconds,
+                            self.settings.ai_timeout_seconds,
+                        ),
+                        effort=self.settings.ai_effort,
+                    )
                 )
+            outcome, usage = "ok", result.usage
+        except AIError as exc:
+            outcome = exc.code
+            raise
+        finally:
+            # Labels come from the server's configuration and fixed error codes; never prompts.
+            seconds = time.perf_counter() - started
+            METRICS.observe_ai(provider.name, provider.model or "-", outcome, seconds, usage)
+            logger.info(
+                "AI request provider=%s model=%s outcome=%s duration_ms=%d input_tokens=%s output_tokens=%s",
+                provider.name,
+                provider.model or "-",
+                outcome,
+                round(seconds * 1000),
+                (usage or {}).get("input_tokens", 0),
+                (usage or {}).get("output_tokens", 0),
             )
         try:
             return output.model_validate(result.data), result
