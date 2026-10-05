@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from app.services.ai.base import (
     AIContextTooLargeError,
+    AIError,
     AIMalformedResponseError,
     AIProviderError,
     AIRateLimitedError,
@@ -290,7 +291,7 @@ def test_ollama_request_has_no_credential(base: str) -> None:
             GEMINI,
             httpx.Response(400, json={"error": {"details": [{"reason": "API_KEY_INVALID"}]}}),
             AIProviderError,
-            "credential",
+            "authentication failed",
         ),
         (
             GEMINI,
@@ -355,6 +356,51 @@ def test_provider_failures_are_normalized(
 ) -> None:
     with pytest.raises(error, match=message):
         provider(profile, lambda _: response).generate_structured(REQUEST)
+
+
+@pytest.mark.parametrize(
+    ("profile", "response", "code"),
+    [
+        # What OpenAI answered for an account without credit (observed 2026-10-05): a 429 that is not
+        # a rate limit, so "try again shortly" would be wrong.
+        (
+            OPENAI,
+            httpx.Response(
+                429, json={"error": {"code": "credit_balance_exhausted", "type": "insufficient_quota"}}
+            ),
+            "ai_quota_exceeded",
+        ),
+        (OPENAI, httpx.Response(429, json={"error": {"code": "insufficient_quota"}}), "ai_quota_exceeded"),
+        (OPENROUTER, httpx.Response(402, json={"error": {"code": 402}}), "ai_quota_exceeded"),
+        (OPENAI, httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}}), "ai_rate_limited"),
+        (OPENAI, httpx.Response(401, json={"error": {"code": "invalid_api_key"}}), "ai_auth_failed"),
+        (OPENAI, httpx.Response(403, json={}), "ai_auth_failed"),
+        (
+            GEMINI,
+            httpx.Response(400, json={"error": {"details": [{"reason": "API_KEY_INVALID"}]}}),
+            "ai_auth_failed",
+        ),
+        (OPENAI, httpx.Response(404, json={"error": {"code": "model_not_found"}}), "ai_model_unavailable"),
+    ],
+)
+def test_failures_carry_a_specific_reason_code(
+    profile: CompatibleProfile, response: httpx.Response, code: str
+) -> None:
+    with pytest.raises(AIError) as raised:
+        provider(profile, lambda _: response).generate_structured(REQUEST)
+    assert raised.value.code == code
+    if code == "ai_quota_exceeded":
+        assert "no credit or quota" in raised.value.message
+        assert "try again shortly" not in raised.value.message.lower()
+
+
+def test_unreachable_provider_logs_the_network_error_type(caplog: pytest.LogCaptureFixture) -> None:
+    def reset(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError("connection reset by peer", request=request)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(AIUnavailableError, match="network error"):
+        provider(OPENAI, reset).generate_structured(REQUEST)
+    assert "could not be reached (ReadError)" in caplog.text
 
 
 @pytest.mark.parametrize("profile", [OPENAI, GEMINI, OPENROUTER, OLLAMA])

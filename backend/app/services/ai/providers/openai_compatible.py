@@ -29,6 +29,7 @@ from typing import Any
 import httpx
 
 from app.services.ai.base import (
+    QUOTA_MESSAGE,
     AIContextTooLargeError,
     AIMalformedResponseError,
     AIProviderError,
@@ -164,8 +165,10 @@ class OpenAICompatibleProvider:
             )
         except httpx.TimeoutException:
             raise AITimeoutError() from None
-        except httpx.HTTPError:
-            raise AIUnavailableError("The AI provider could not be reached.") from None
+        except httpx.HTTPError as exc:
+            # The exception type only (ConnectError, ReadError, ...): never the request or headers.
+            logger.warning("The %s provider could not be reached (%s)", self.name, type(exc).__name__)
+            raise AIUnavailableError("The AI provider could not be reached (network error).") from None
 
         status = response.status_code
         request_id = response.headers.get("x-request-id")
@@ -175,15 +178,21 @@ class OpenAICompatibleProvider:
 
     def _raise_for_status(self, response: httpx.Response, request_id: str | None) -> None:
         status = response.status_code
+        if status == 402 or (status == 429 and _is_quota_exhausted(response)):
+            logger.warning("The %s provider account has no credit or quota left (%s)", self.name, status)
+            raise AIProviderError(QUOTA_MESSAGE, code="ai_quota_exceeded")
         if status == 429:
             raise AIRateLimitedError("The AI provider is rate limiting requests. Try again shortly.")
         if status in (401, 403) or (status == 400 and _is_invalid_key(response)):
             logger.warning("The %s provider rejected the configured credential (%s)", self.name, status)
-            raise AIProviderError("The AI provider rejected the server's credential.")
-        if status == 402:
-            raise AIProviderError("The AI provider account has no credit left for this request.")
+            raise AIProviderError(
+                "The AI provider rejected the server's API key (authentication failed).",
+                code="ai_auth_failed",
+            )
         if status == 404:
-            raise AIProviderError(f"The AI model {self.model!r} is not available to this account.")
+            raise AIProviderError(
+                f"The AI model {self.model!r} is not available to this account.", code="ai_model_unavailable"
+            )
         if status == 413:
             raise AIContextTooLargeError("The request is too large for the AI provider.")
         if status >= 500:
@@ -247,6 +256,21 @@ def _usage(raw: object) -> dict[str, int]:
 
 def _count(value: object) -> int:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
+_QUOTA_CODES = {"insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"}
+
+
+def _is_quota_exhausted(response: httpx.Response) -> bool:
+    """OpenAI answers an exhausted account with HTTP 429 and code/type insufficient_quota: not a rate
+    limit (retrying later does not help until credit is added)."""
+    try:
+        error = response.json().get("error")
+    except (ValueError, AttributeError):
+        return False
+    if not isinstance(error, dict):
+        return False
+    return bool({str(error.get("code")), str(error.get("type"))} & _QUOTA_CODES)
 
 
 def _is_invalid_key(response: httpx.Response) -> bool:

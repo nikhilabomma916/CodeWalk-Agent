@@ -61,6 +61,54 @@ export function AdvisoryFooter({
   );
 }
 
+/** Short, safe reasons for the backend's normalized AI error codes. */
+const AI_UNAVAILABLE_REASONS: Record<string, string> = {
+  ai_quota_exceeded: "provider quota exceeded",
+  ai_auth_failed: "authentication failed",
+  ai_model_unavailable: "model not available",
+  ai_rate_limited: "provider rate limit reached",
+  ai_timeout: "provider timed out",
+  ai_unavailable: "provider could not be reached",
+  ai_disabled: "AI is turned off on this server",
+  ai_not_configured: "AI is not configured on this server",
+};
+
+const AI_FAILED_REASONS: Record<string, string> = {
+  ai_provider_error: "the provider rejected the request",
+  ai_malformed_response: "the answer could not be used",
+  ai_context_too_large: "the request is too large",
+  ai_refused: "the provider declined the request",
+};
+
+/**
+ * An AI failure with its reason ("AI unavailable / Reason: provider quota exceeded") and the
+ * backend's message. Unknown codes show only the message.
+ */
+export function AiErrorNotice({ code, message }: { code?: string | null; message: string }) {
+  const unavailable = code ? AI_UNAVAILABLE_REASONS[code] : undefined;
+  const reason = unavailable ?? (code ? AI_FAILED_REASONS[code] : undefined);
+  if (!reason) {
+    return (
+      <p role="alert" className="text-xs text-danger">
+        {message}
+      </p>
+    );
+  }
+  const off = code === "ai_disabled" || code === "ai_not_configured";
+  return (
+    <div
+      role="alert"
+      className={`space-y-0.5 rounded border px-2 py-1.5 text-xs ${
+        off ? "border-border text-fg-muted" : "border-danger/40 bg-danger/10 text-danger"
+      }`}
+    >
+      <p className="font-semibold">{unavailable ? "AI unavailable" : "AI request failed"}</p>
+      <p>Reason: {reason}</p>
+      {message && <p className="text-fg-muted">{message}</p>}
+    </div>
+  );
+}
+
 /** Loading / error / unavailable states shared by the AI panels. */
 export function RemoteStatus<T>({
   result,
@@ -80,17 +128,7 @@ export function RemoteStatus<T>({
     );
   }
   if (result.state === "error") {
-    const unavailable = result.code === "ai_disabled" || result.code === "ai_not_configured";
-    return (
-      <p
-        role="alert"
-        className={`rounded border px-2 py-1.5 text-xs ${
-          unavailable ? "border-border text-fg-muted" : "border-danger/40 bg-danger/10 text-danger"
-        }`}
-      >
-        {unavailable ? `AI unavailable: ${result.message}` : result.message}
-      </p>
-    );
+    return <AiErrorNotice code={result.code} message={result.message} />;
   }
   return <>{children(result.data)}</>;
 }

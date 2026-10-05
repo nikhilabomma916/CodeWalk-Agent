@@ -39,7 +39,7 @@ checks that `/metrics` is not reachable through the proxy.
 | `codewalk_operation_duration_seconds` (histogram) | `operation`, `outcome` (below) |
 | `codewalk_db_statement_duration_seconds` (histogram) | none |
 | `codewalk_process_start_time_seconds` (gauge) | none |
-| `codewalk_ai_request_duration_seconds` (histogram) | `provider`, `model` (from the server's configuration), `outcome` (`ok` or `ai_timeout`, `ai_rate_limited`, `ai_unavailable`, `ai_provider_error`, `ai_malformed_response`, `ai_context_too_large`, `ai_refused`) |
+| `codewalk_ai_request_duration_seconds` (histogram) | `provider`, `model` (from the server's configuration), `outcome` (`ok` or `ai_timeout`, `ai_rate_limited`, `ai_quota_exceeded`, `ai_auth_failed`, `ai_model_unavailable`, `ai_unavailable`, `ai_provider_error`, `ai_malformed_response`, `ai_context_too_large`, `ai_refused`) |
 | `codewalk_ai_tokens_total` (counter) | `provider`, `model`, `direction` (`input`, `output`) |
 | `codewalk_ai_cost_microusd_total` (counter) | `provider`, `model` (OpenRouter reports cost) |
 | `codewalk_error_responses_total` (counter) | `status`, `code` (every error response: `database_unavailable`, `rate_limited`, `github_*`, ...) |
