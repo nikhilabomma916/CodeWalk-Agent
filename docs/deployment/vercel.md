@@ -70,7 +70,7 @@ below are placeholders.
 | `CODEWALK_DATABASE_POOL_SIZE` | recommended | no | `2`–`3`: every instance has its own pool |
 | `CODEWALK_LOG_FORMAT` | no | no | `json` |
 | `CODEWALK_AI_ENABLED` / `CODEWALK_AI_PROVIDER` / `CODEWALK_AI_MODEL` | for AI | no | for example `true` / `openai` / `gpt-5` |
-| `CODEWALK_AI_API_KEY` | for AI | **yes** | provider key, backend only |
+| `CODEWALK_AI_API_KEY` (or the provider's own `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`) | for AI | **yes** | provider key, backend only. Providers: [docs/ai/providers.md](../ai/providers.md). Ollama only behind your own https URL |
 | `RAG_ENABLED` / `RAG_EMBEDDING_PROVIDER` / `RAG_EMBEDDING_MODEL` | for RAG | no | for example `true` / `voyage` / `voyage-code-4` |
 | `VOYAGE_API_KEY` | for RAG | **yes** | embedding key, backend only |
 | `CODEWALK_SHUTDOWN_TIMEOUT_SECONDS` | no | no | default `20`; keep below Vercel's 30 s SIGTERM grace period |

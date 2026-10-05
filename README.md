@@ -344,8 +344,8 @@ The repository-level `.env` is read by both the backend and the frontend (`backe
 | `CODEWALK_REGISTER_MAX_ATTEMPTS`, `CODEWALK_REGISTER_WINDOW_SECONDS` | registrations per address before HTTP 429 |
 | `CODEWALK_FILE_VERSION_HISTORY_LIMIT`, `CODEWALK_ANALYSIS_HISTORY_PER_FILE` | versions / analyses kept per file |
 | `CODEWALK_AI_ENABLED` | turn AI assistance on (default `false`) |
-| `ANTHROPIC_API_KEY` (or `CODEWALK_AI_API_KEY`) | provider credential, **server-side only** |
-| `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | `anthropic`; model (default `claude-opus-5-5`) |
+| `CODEWALK_AI_API_KEY`, or the provider's own `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` | provider credential, **server-side only** (Ollama needs none) |
+| `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | `anthropic` (default), `openai`, `gemini`, `openrouter` or `ollama`; no fallback between them. See [docs/ai/providers.md](docs/ai/providers.md) |
 | `CODEWALK_AI_TIMEOUT_SECONDS`, `CODEWALK_AI_MAX_TOKENS`, `CODEWALK_AI_EFFORT` | request limits and reasoning effort |
 | `CODEWALK_AI_MAX_REQUESTS`, `CODEWALK_AI_WINDOW_SECONDS` | AI requests per user per window (then 429) |
 | `RAG_ENABLED` | turn semantic retrieval on (default `false`) |
