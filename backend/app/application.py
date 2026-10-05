@@ -29,6 +29,11 @@ from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
 from app.services.github.client import GitHubClient
 from app.services.health import HealthService
+from app.services.health_checks import (
+    ConfigurationHealthCheck,
+    SchemaHealthCheck,
+    TypeScriptWorkerHealthCheck,
+)
 from app.services.project_search.index import IndexCache
 from app.services.retrieval.service import RetrievalService
 
@@ -105,7 +110,11 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         version=__version__,
         environment=settings.env.value,
         check_timeout_seconds=settings.health_check_timeout_seconds,
-        checks=[DatabaseHealthCheck(database, required=settings.is_production)],
+        checks=[
+            DatabaseHealthCheck(database, required=settings.is_production),
+            SchemaHealthCheck(database, required=settings.is_production),
+            TypeScriptWorkerHealthCheck(typescript_worker),
+        ],
     )
     app.state.database = database
     app.state.analysis_engine = AnalysisEngine.create_default(
@@ -139,6 +148,18 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
     app.state.register_limiter = limiter(
         "register", settings.register_max_attempts, settings.register_window_seconds
     )
+    ai_service, retrieval_service = app.state.ai_service, app.state.retrieval_service
+
+    def ai_state() -> tuple[bool, bool, str | None]:
+        state = ai_service.status()
+        return state.enabled, state.configured, state.detail
+
+    def embedding_state() -> tuple[bool, bool, str | None]:
+        state = retrieval_service.status()
+        return state.enabled, state.configured, None
+
+    app.state.health_service.register(ConfigurationHealthCheck("ai_provider", ai_state))
+    app.state.health_service.register(ConfigurationHealthCheck("embeddings", embedding_state))
     app.state.github_client = GitHubClient(timeout_seconds=settings.github_timeout_seconds)
     app.state.github_import_limiter = limiter(
         "github-import", settings.github_import_max_runs, settings.github_import_window_seconds

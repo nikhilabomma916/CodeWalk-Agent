@@ -75,7 +75,7 @@ def test_required_check_failure_makes_service_unavailable(app: FastAPI, client: 
 def test_optional_check_failure_is_degraded(app: FastAPI, client: TestClient) -> None:
     service = health_service(app)
     service.register(StubCheck("primary", required=True))
-    service.register(StubCheck("ai_provider", required=False, behaviour="fail"))
+    service.register(StubCheck("optional_dependency", required=False, behaviour="fail"))
 
     response = client.get("/api/v1/health")
 
@@ -83,7 +83,16 @@ def test_optional_check_failure_is_degraded(app: FastAPI, client: TestClient) ->
     body = response.json()
     assert body["status"] == "degraded"
     statuses = {item["name"]: item["status"] for item in body["checks"]}
-    assert statuses == {"database": "not_configured", "primary": "pass", "ai_provider": "fail"}
+    assert statuses == {
+        "database": "not_configured",
+        "schema": "not_configured",
+        "typescript_worker": statuses["typescript_worker"],  # pass, or not_configured without Node
+        "ai_provider": "not_configured",  # AI off in tests
+        "embeddings": "not_configured",
+        "primary": "pass",
+        "optional_dependency": "fail",
+    }
+    assert statuses["typescript_worker"] in {"pass", "not_configured"}
 
 
 def test_unexpected_check_error_does_not_leak_details(app: FastAPI, client: TestClient) -> None:

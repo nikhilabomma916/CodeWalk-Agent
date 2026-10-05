@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.crypto import TokenCipher, TokenDecryptionError
 from app.core.exceptions import AppError, ConflictError
+from app.core.metrics import timed
 from app.core.rate_limit import RateLimiter
 from app.db.models import ActivityType, GitHubConnection, Project, ProjectSource, User
 from app.schemas.github import (
@@ -225,6 +226,15 @@ class GitHubService:
     # --- import --------------------------------------------------------------------------------
 
     def import_repository(self, request: GitHubImportRequest) -> GitHubImportResult:
+        """Import with metrics: duration and outcome (ok or the error code) as github_import."""
+        with timed("github_import") as metric:
+            try:
+                return self._import_repository(request)
+            except AppError as exc:
+                metric["outcome"] = exc.code
+                raise
+
+    def _import_repository(self, request: GitHubImportRequest) -> GitHubImportResult:
         if self.files is None:  # pragma: no cover - wired by the route
             raise RuntimeError("GitHubService.import_repository needs a FileService")
         self._require_configured()
