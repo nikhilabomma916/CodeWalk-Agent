@@ -42,6 +42,8 @@ import {
 } from "./state";
 
 const SETTINGS_STORAGE_KEY = "codewalk.editorSettings";
+/** Auto save waits this long after the last edit of a file. */
+export const AUTO_SAVE_DELAY_MS = 1500;
 const LAST_SERVER_PROJECT_KEY = "codewalk.lastServerProject";
 
 function rememberServerProject(id: string | null): void {
@@ -77,6 +79,8 @@ function loadStoredSettings(): EditorSettings {
         typeof stored.wordWrap === "boolean" ? stored.wordWrap : DEFAULT_EDITOR_SETTINGS.wordWrap,
       minimap:
         typeof stored.minimap === "boolean" ? stored.minimap : DEFAULT_EDITOR_SETTINGS.minimap,
+      autoSave:
+        typeof stored.autoSave === "boolean" ? stored.autoSave : DEFAULT_EDITOR_SETTINGS.autoSave,
     };
   } catch {
     return DEFAULT_EDITOR_SETTINGS;
@@ -367,6 +371,35 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       return false;
     }
+  }, []);
+
+  // Auto save: a changed file is saved once typing has paused (each edit restarts its timer). A
+  // failed save is not retried until the file is edited again, so a failing source cannot loop.
+  const autoSaveTimers = useRef(new Map<ProjectPath, ReturnType<typeof setTimeout>>());
+  const autoSave =
+    state.editorSettings.autoSave &&
+    !!state.project &&
+    !state.project.readOnly &&
+    state.project.kind !== "local-snapshot";
+  useEffect(() => {
+    const timers = autoSaveTimers.current;
+    for (const [path, buffer] of Object.entries(state.buffers)) {
+      const pending = timers.get(path);
+      if (pending) clearTimeout(pending);
+      timers.delete(path);
+      if (!autoSave || !isDirty(buffer) || buffer.saving || buffer.saveError) continue;
+      timers.set(
+        path,
+        setTimeout(() => {
+          timers.delete(path);
+          void saveFile(path);
+        }, AUTO_SAVE_DELAY_MS),
+      );
+    }
+  }, [autoSave, saveFile, state.buffers]);
+  useEffect(() => {
+    const timers = autoSaveTimers.current;
+    return () => timers.forEach((timer) => clearTimeout(timer));
   }, []);
 
   const actions = useMemo<WorkspaceActions>(

@@ -173,8 +173,13 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
             {languageLabel(buffer.languageOverride ?? detectLanguage(activePath))}
           </span>
           {fileState && (
-            <span className={`${item} ${fileState === "Save failed" ? "text-danger" : ""}`}>
+            <span
+              role="status"
+              title={fileState === "Save failed" ? buffer.saveError : undefined}
+              className={`${item} ${fileState === "Save failed" ? "text-danger" : ""}`}
+            >
               {fileState}
+              {fileState === "Saved" && <span aria-hidden>✓</span>}
             </span>
           )}
         </>

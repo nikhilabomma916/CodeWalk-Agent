@@ -92,6 +92,15 @@ export function EditorSettingsMenu({ settings, onChange }: EditorSettingsMenuPro
             />
           </label>
           <label className={rowClass}>
+            Auto save
+            <input
+              type="checkbox"
+              checked={settings.autoSave}
+              onChange={(event) => onChange({ autoSave: event.target.checked })}
+              className="accent-accent"
+            />
+          </label>
+          <label className={rowClass}>
             Minimap
             <input
               type="checkbox"

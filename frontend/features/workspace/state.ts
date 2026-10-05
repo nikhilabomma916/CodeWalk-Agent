@@ -67,6 +67,8 @@ export interface EditorSettings {
   tabSize: number;
   wordWrap: boolean;
   minimap: boolean;
+  /** Save a changed file automatically shortly after typing stops. */
+  autoSave: boolean;
 }
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -74,6 +76,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   tabSize: 4,
   wordWrap: false,
   minimap: true,
+  autoSave: true,
 };
 
 export interface RevealRequest {
@@ -268,7 +271,7 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
     case "file/edited":
       return updateBuffer(state, action.path, (buffer) =>
         buffer.status === "ready" && buffer.content !== action.content
-          ? { ...buffer, content: action.content }
+          ? { ...buffer, content: action.content, saveError: undefined }
           : buffer,
       );
 
