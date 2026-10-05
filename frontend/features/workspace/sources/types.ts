@@ -22,6 +22,8 @@ export interface ProjectSource {
   read(path: ProjectPath): Promise<string>;
   write(path: ProjectPath, content: string): Promise<void>;
   createFile(path: ProjectPath): Promise<void>;
+  /** Coding "+ New File" with the server's stricter checks; sources without it use createFile. */
+  createCodeFile?(name: string): Promise<void>;
 }
 
 export interface SourceListing {
@@ -33,7 +35,7 @@ export interface SourceListing {
 }
 
 export type SourceErrorReason =
-  "binary" | "too-large" | "not-found" | "exists" | "permission" | "io" | "read-only";
+  "binary" | "too-large" | "not-found" | "exists" | "permission" | "io" | "read-only" | "invalid";
 
 export class SourceError extends Error {
   readonly reason: SourceErrorReason;

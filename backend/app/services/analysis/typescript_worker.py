@@ -4,6 +4,11 @@ The worker (``backend/tools/typescript-analyzer/analyzer.mjs``) runs the TypeScr
 compiler's language service. Source text is sent as JSON over stdin; it is parsed
 and type-checked, never executed. One worker serves all requests; requests are
 serialized, time out individually, and a hung or crashed worker is restarted.
+
+Shutdown (``close``, from the application lifespan on SIGTERM) is bounded: the worker's stdin is
+closed (it exits on end of input), then it is terminated and finally killed, without waiting for a
+request in progress, which fails instead. The worker also exits by itself when its parent dies,
+because its stdin closes. No worker is started after ``close``.
 """
 
 from __future__ import annotations
@@ -37,6 +42,7 @@ class TypeScriptWorker:
         self._responses: Queue[dict[str, Any]] = Queue()
         self._lock = threading.Lock()
         self._next_id = 0
+        self._closed = False
         self.version: str | None = None
 
     def unavailable_reason(self) -> str | None:
@@ -63,7 +69,7 @@ class TypeScriptWorker:
             request_id = self._next_id
             try:
                 self._send({"id": request_id, **payload})
-            except OSError as exc:
+            except (OSError, ValueError) as exc:  # ValueError: stdin closed by close()
                 self._stop()
                 raise TypeScriptWorkerError("TypeScript analyzer stopped unexpectedly") from exc
             response = self._await(request_id, timeout)
@@ -88,6 +94,8 @@ class TypeScriptWorker:
             # A late response to a request that already timed out; discard it.
 
     def _ensure_started(self) -> None:
+        if self._closed:
+            raise TypeScriptWorkerError("TypeScript analysis is unavailable while the server shuts down")
         if self._process is not None and self._process.poll() is None:
             return
         if self._node is None:
@@ -104,9 +112,16 @@ class TypeScriptWorker:
             bufsize=1,
         )
         threading.Thread(target=self._read_loop, args=(self._process, self._responses), daemon=True).start()
+        if self._closed:  # close() ran while the process was being created
+            self._stop()
+            raise TypeScriptWorkerError("TypeScript analysis is unavailable while the server shuts down")
         self._next_id += 1
         ping_id = self._next_id
-        self._send({"id": ping_id, "ping": True})
+        try:
+            self._send({"id": ping_id, "ping": True})
+        except (OSError, ValueError) as exc:
+            self._stop()
+            raise TypeScriptWorkerError("TypeScript analyzer stopped unexpectedly") from exc
         ready = self._await(ping_id, self._startup_timeout)
         self.version = ready.get("version")
         logger.info("TypeScript analyzer started (typescript %s)", self.version)
@@ -141,6 +156,31 @@ class TypeScriptWorker:
                 with contextlib.suppress(OSError):
                     stream.close()
 
-    def close(self) -> None:
-        with self._lock:
-            self._stop()
+    def close(self, timeout: float = 5.0) -> None:
+        """Stops the worker within about ``timeout`` seconds, even while a request is in progress."""
+        self._closed = True
+        process = self._process
+        if process is not None:
+            self._shut_down(process, timeout)  # an in-progress request sees end of output and fails
+        if self._lock.acquire(timeout=timeout):
+            try:
+                self._stop()
+            finally:
+                self._lock.release()
+
+    @staticmethod
+    def _shut_down(process: subprocess.Popen[str], timeout: float) -> None:
+        """End of input first (the worker exits cleanly), then SIGTERM, then SIGKILL."""
+        step = max(timeout / 3, 0.1)
+        if process.stdin is not None:
+            with contextlib.suppress(OSError, ValueError):
+                process.stdin.close()
+        for signal_process in (None, process.terminate, process.kill):
+            if signal_process is not None and process.poll() is None:
+                with contextlib.suppress(OSError):
+                    signal_process()
+            try:
+                process.wait(timeout=step)
+                return
+            except subprocess.TimeoutExpired:
+                continue

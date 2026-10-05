@@ -40,11 +40,15 @@ describe("AppShell navigation", () => {
   it("links to the real routes and marks the active one", async () => {
     renderShell("/app/projects/p1");
     const nav = await screen.findByRole("navigation", { name: "Main" });
+    expect(
+      within(nav).getByRole("button", { name: /Switch to (light|dark) theme/ }),
+    ).toBeInTheDocument();
     const links = within(nav).getAllByRole("link");
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       "/app/projects",
       "/app/coding",
       "/app/projects",
+      "/app/uploads",
       "/app/history",
     ]);
     expect(within(nav).getByRole("link", { name: "Projects" })).toHaveAttribute(

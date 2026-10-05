@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 
 from app.schemas.search import MatchType
 
@@ -59,6 +60,13 @@ def compact(text: str) -> str:
     return "".join(_SPLIT.split(text)).lower()
 
 
+# Symbol names repeat across searches (and across files): their split forms are cached. Bounded;
+# the cache holds names only, in this process, and nothing in it is ever returned to a client.
+@lru_cache(maxsize=65_536)
+def _name_forms(name: str) -> tuple[str, str, tuple[str, ...]]:
+    return name.lower(), compact(name), tuple(terms(name))
+
+
 def coverage(query_terms: Sequence[str], name_terms: Sequence[str]) -> float:
     if not query_terms:
         return 0.0
@@ -68,16 +76,21 @@ def coverage(query_terms: Sequence[str], name_terms: Sequence[str]) -> float:
 
 def match_name(query: str, query_terms: Sequence[str], name: str) -> tuple[MatchType, float, str] | None:
     """How a symbol name matches the query, if at all: (type, coverage, reason)."""
-    if name.lower() == query.strip().lower() or compact(name) == compact(query):
+    lowered, name_compact, name_terms = _name_forms(name)
+    query_lowered, query_compact = _query_forms(query)
+    if lowered == query_lowered or name_compact == query_compact:
         return MatchType.SYMBOL_EXACT, 1.0, "name equals the query (ignoring case and separators)"
-    q = compact(query)
-    if len(q) >= 2 and compact(name).startswith(q):
+    if len(query_compact) >= 2 and name_compact.startswith(query_compact):
         return MatchType.SYMBOL_PREFIX, 1.0, "name starts with the query"
-    share = coverage(query_terms, terms(name))
-    if share > 0:
-        matched = [t for t in query_terms if any(n.startswith(t) for n in terms(name))]
-        return MatchType.SYMBOL_TOKENS, share, f"name contains {', '.join(matched)}"
+    matched = [t for t in query_terms if any(n.startswith(t) for n in name_terms)]
+    if matched:
+        return MatchType.SYMBOL_TOKENS, len(matched) / len(query_terms), f"name contains {', '.join(matched)}"
     return None
+
+
+@lru_cache(maxsize=256)
+def _query_forms(query: str) -> tuple[str, str]:
+    return query.strip().lower(), compact(query)
 
 
 def score(match_type: MatchType, share: float, bonus: int) -> float:

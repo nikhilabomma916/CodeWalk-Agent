@@ -30,23 +30,29 @@ from sqlalchemy.orm import Session
 from app.core.audit import audit
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
+from app.core.metrics import METRICS
 from app.core.rate_limit import AttemptLimiter
 from app.db.models import (
     ActivityType,
     AgentAction,
     AgentRun,
     AgentRunStatus,
+    ProjectOrigin,
     User,
 )
 from app.schemas.agent import (
     AgentActionOut,
+    AgentContextInfo,
     AgentEvent,
     AgentEventType,
+    AgentMode,
     AgentRunError,
     AgentRunOut,
     AgentRunRequest,
     AgentStatusResponse,
     AgentToolInfo,
+    AgentUsage,
+    ReviewFinding,
     ToolCallRecord,
     ToolPermission,
 )
@@ -63,6 +69,7 @@ from app.services.ai.base import (
 )
 from app.services.ai.service import AIService
 from app.services.analysis.engine import AnalysisEngine
+from app.services.memory import MemoryService
 from app.services.project_search.context import ProjectContextBuilder
 from app.services.project_search.index import ProjectIndex
 from app.services.project_search.service import ProjectSearchService
@@ -153,6 +160,8 @@ class AgentService:
             ],
             max_steps=self.settings.agent_max_steps,
             max_actions=self.settings.agent_max_actions,
+            max_tool_calls=self.settings.agent_max_tool_calls,
+            modes=[m.value for m in AgentMode],
         )
 
     def _provider(self) -> AIProvider:
@@ -206,7 +215,11 @@ class AgentService:
             raise AgentRunLimitError(retry_after)
         project, index = self.search.project_index(request.project_id)  # 404 for other users' projects
         self._validate(request, index)
-        self.limiter.record_failure(key)  # every accepted run counts toward the limit
+        # Every accepted run counts toward the limit. Checked again atomically here: simultaneous
+        # requests may all have passed the early check above before any of them was recorded.
+        if (retry_after := self.limiter.acquire(key)) is not None:
+            audit("rate_limited", level=logging.WARNING, scope="agent", user=self.owner.id)
+            raise AgentRunLimitError(retry_after)
 
         started = time.perf_counter()
         deadline = started + self.settings.agent_timeout_seconds
@@ -223,6 +236,9 @@ class AgentService:
             tool_calls=[],
             warnings=[],
             duration_ms=0,
+            mode=request.mode.value,
+            findings=[],
+            usage={},
         )
         self.session.add(run)
         self.session.flush()
@@ -234,7 +250,17 @@ class AgentService:
         calls: list[ToolCallRecord] = []
         warnings: list[str] = []
         turns: list[prompts.ToolTurn] = []
-        policy = ToolPolicy(max_actions=self.settings.agent_max_actions)
+        # Uploaded projects (Module 18) are analyzed read-only: the agent answers but proposes nothing.
+        read_only = project.origin is ProjectOrigin.UPLOAD
+        policy = ToolPolicy(
+            max_actions=0 if read_only else self.settings.agent_max_actions,
+            max_tool_calls=self.settings.agent_max_tool_calls,
+            read_only=read_only,
+        )
+        # The developer's saved notes for this project (ownership was checked above).
+        memory = MemoryService(self.session, self.settings, self.owner).for_prompt(project.id)
+        notes = [(m.kind.value, m.text) for m in memory]
+        usage = AgentUsage()
         ctx = ToolContext(
             session=self.session,
             settings=self.settings,
@@ -253,7 +279,7 @@ class AgentService:
             events.append(AgentEvent(type=kind, message=message, at=_now(), tool=tool, data=extra))
 
         emit(AgentEventType.STARTED, "Agent started")
-        system = prompts.system_prompt()
+        system = prompts.system_prompt(request.mode)
         max_steps = self.settings.agent_max_steps
         answer: str | None = None
         status = AgentRunStatus.COMPLETED
@@ -267,20 +293,34 @@ class AgentService:
                 emit(AgentEventType.LIMIT_REACHED, "Stopped: time limit reached")
                 break
             kept = sum(len(t.content) for t in turns)
-            answer_now = step == max_steps or kept >= self.settings.agent_max_context_chars or policy.stuck
+            tokens = usage.input_tokens + usage.output_tokens
+            over_budget = tokens >= self.settings.agent_max_tokens_per_run
+            answer_now = (
+                step == max_steps
+                or kept >= self.settings.agent_max_context_chars
+                or policy.stuck
+                or policy.out_of_calls
+                or over_budget
+            )
             user = prompts.user_prompt(
                 request,
                 project.name,
                 turns,
                 steps_left=max_steps - step,
-                actions_left=self.settings.agent_max_actions - policy.actions,
+                actions_left=policy.max_actions - policy.actions,
                 answer_now=answer_now,
+                notes=notes,
             )
+            usage.largest_prompt_chars = max(usage.largest_prompt_chars, len(system) + len(user))
             try:
-                decision, _ = self.ai.run(
+                decision, result = self.ai.run(
                     provider, system, user, prompts.ModelAgentStep, timeout_seconds=remaining
                 )
+                usage.provider_calls += 1
+                usage.input_tokens += int(result.usage.get("input_tokens", 0) or 0)
+                usage.output_tokens += int(result.usage.get("output_tokens", 0) or 0)
             except AIError as exc:
+                usage.provider_calls += 1
                 status = AgentRunStatus.FAILED
                 error = AgentRunError(code=exc.code, message=exc.message)
                 emit(AgentEventType.FAILED, exc.message)
@@ -306,6 +346,10 @@ class AgentService:
                     if policy.stuck
                     else "the context limit"
                     if kept >= self.settings.agent_max_context_chars
+                    else "the tool-call limit"
+                    if policy.out_of_calls
+                    else "the token budget"
+                    if over_budget
                     else "the step limit"
                 )
                 warnings.append(f"The agent stopped at {reason} before answering.")
@@ -326,8 +370,12 @@ class AgentService:
         run.events = [e.model_dump(mode="json") for e in events]
         run.tool_calls = [c.model_dump(mode="json") for c in calls]
         run.warnings = warnings
+        usage.tool_calls = len(calls)
+        run.usage = {**usage.model_dump(), "files_inspected": ctx.inspected[:100], "memory_items": len(notes)}
+        run.findings = list(ctx.findings)
         run.duration_ms = round((time.perf_counter() - started) * 1000)
         run.completed_at = _now()
+        METRICS.observe("agent_run", time.perf_counter() - started, status.value)
         ActivityRecorder(self.session, self.owner).record(
             ActivityType.AGENT_RUN,
             project,
@@ -337,15 +385,22 @@ class AgentService:
                 "status": status.value,
                 "tool_calls": len(calls),
                 "proposed_changes": len(ctx.actions),
+                "mode": request.mode.value,
+                "findings": len(ctx.findings),
             },
         )
         self.session.commit()
         logger.info(
-            "Agent run %s %s: %d tool call(s), %d proposal(s), %d ms",
+            "Agent run %s %s (mode %s): %d tool call(s), %d proposal(s), %d finding(s), %d provider call(s), "
+            "%d tokens, %d ms",
             run.id,
             status.value,
+            request.mode.value,
             len(calls),
             len(ctx.actions),
+            len(ctx.findings),
+            usage.provider_calls,
+            usage.input_tokens + usage.output_tokens,
             run.duration_ms,
         )
         return self.get_run(run.id)
@@ -497,6 +552,10 @@ class AgentService:
         actions = self.session.scalars(
             select(AgentAction).where(AgentAction.run_id == run.id).order_by(AgentAction.created_at)
         ).all()
+        group_sizes: dict[Any, int] = {}
+        for a in actions:
+            group_sizes[a.group_id] = group_sizes.get(a.group_id, 0) + 1
+        usage = dict(run.usage or {})
         error = (
             AgentRunError(code=run.error_code, message=run.error_message or "") if run.error_code else None
         )
@@ -512,7 +571,14 @@ class AgentService:
             error=error,
             events=[AgentEvent.model_validate(e) for e in run.events],
             tool_calls=[ToolCallRecord.model_validate(c) for c in run.tool_calls],
-            actions=[action_out(a) for a in actions],
+            mode=run.mode,
+            actions=[action_out(a, group_sizes.get(a.group_id, 1) if a.group_id else 1) for a in actions],
+            findings=[ReviewFinding.model_validate(f) for f in run.findings or []],
+            usage=AgentUsage.model_validate({k: v for k, v in usage.items() if k in AgentUsage.model_fields}),
+            context=AgentContextInfo(
+                files_inspected=list(usage.get("files_inspected", [])),
+                memory_items=int(usage.get("memory_items", 0)),
+            ),
             warnings=list(run.warnings),
             duration_ms=run.duration_ms,
             created_at=run.created_at,
@@ -523,10 +589,15 @@ class AgentService:
         return [AgentEvent.model_validate(e) for e in self._owned_run(run_id).events]
 
 
-def action_out(action: AgentAction) -> AgentActionOut:
+def action_out(action: AgentAction, group_size: int = 1) -> AgentActionOut:
     return AgentActionOut(
         id=action.id,
         run_id=action.run_id,
+        kind=action.kind,
+        group_id=action.group_id,
+        group_size=group_size,
+        confidence=action.confidence,
+        risk=action.risk,
         status=action.status.value,
         file_path=action.file_path,
         summary=action.summary,

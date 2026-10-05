@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.logging import request_id_var
+from app.core.metrics import timed
 from app.core.rate_limit import AttemptLimiter
 from app.db.models import ActivityType, Analysis, AnalysisStatus, AnalysisType, Project, ProjectFile, User
 from app.repositories.analyses import AnalysisRepository
@@ -114,7 +115,7 @@ class AIService:
             try:
                 self.provider = create_provider(settings)
             except UnknownProviderError as exc:
-                self.provider_problem = f"Unknown AI provider {exc.args[0]!r} (supported: anthropic)."
+                self.provider_problem = f"Unknown AI provider {exc.args[0]!r} (supported: anthropic, openai)."
 
     def status(self) -> AIStatusResponse:
         enabled = self.settings.ai_enabled
@@ -147,9 +148,8 @@ class AIService:
         if not state.configured:
             raise AINotConfiguredError(state.detail or "The AI provider is not configured.")
         key = f"ai:{user.id}"
-        if (retry_after := self.limiter.retry_after(key)) is not None:
+        if (retry_after := self.limiter.acquire(key)) is not None:  # every request counts toward the limit
             raise AIRequestLimitError(retry_after)
-        self.limiter.record_failure(key)  # every request counts toward the limit
         return self.provider
 
     def run(
@@ -161,18 +161,19 @@ class AIService:
         *,
         timeout_seconds: float | None = None,
     ) -> tuple[ModelT, StructuredResult]:
-        result = provider.generate_structured(
-            StructuredRequest(
-                system=system,
-                user=user,
-                schema=output_schema(output),
-                max_tokens=self.settings.ai_max_tokens,
-                timeout_seconds=min(
-                    timeout_seconds or self.settings.ai_timeout_seconds, self.settings.ai_timeout_seconds
-                ),
-                effort=self.settings.ai_effort,
+        with timed("ai_provider_call"):
+            result = provider.generate_structured(
+                StructuredRequest(
+                    system=system,
+                    user=user,
+                    schema=output_schema(output),
+                    max_tokens=self.settings.ai_max_tokens,
+                    timeout_seconds=min(
+                        timeout_seconds or self.settings.ai_timeout_seconds, self.settings.ai_timeout_seconds
+                    ),
+                    effort=self.settings.ai_effort,
+                )
             )
-        )
         try:
             return output.model_validate(result.data), result
         except ValidationError:

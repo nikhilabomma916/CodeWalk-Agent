@@ -113,7 +113,9 @@ class SearchResponse(BaseModel):
     query: str
     terms: list[str] = Field(description="Normalized query terms used for matching.")
     results: list[SearchResult]
-    total: int = Field(description="Matches found before `limit` was applied (capped).")
+    total: int = Field(
+        description="Matches found before `limit` was applied (capped at the 1,000 best-ranked matches)."
+    )
     truncated: bool
     indexed_files: int
     ranking: str = Field(description="How results are ordered.")

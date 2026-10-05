@@ -13,6 +13,7 @@ const project = {
   description: null,
   root_path: null,
   read_only: false,
+  origin: "workspace" as const,
   created_at: "2026-10-01T00:00:00Z",
   updated_at: "2026-10-01T00:00:00Z",
   stats: { file_count: 1, total_bytes: 8, total_lines: 1, languages: [], last_analyzed_at: null },

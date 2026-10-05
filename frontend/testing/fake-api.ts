@@ -69,6 +69,7 @@ export function makeProject(overrides: Partial<ServerProject> = {}): ServerProje
     description: "Billing and invoices",
     root_path: null,
     read_only: false,
+    origin: "workspace",
     created_at: "2026-09-20T10:00:00Z",
     updated_at: "2026-10-01T08:00:00Z",
     stats: {

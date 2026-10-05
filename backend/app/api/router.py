@@ -12,6 +12,8 @@ from app.api.routes import (
     files,
     health,
     history,
+    insights,
+    memory,
     meta,
     projects,
     retrieval,
@@ -37,3 +39,5 @@ api_v1_router.include_router(ai.router)
 api_v1_router.include_router(retrieval.router)
 api_v1_router.include_router(retrieval.project_router)
 api_v1_router.include_router(agent.router)
+api_v1_router.include_router(insights.router)
+api_v1_router.include_router(memory.router)

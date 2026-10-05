@@ -12,8 +12,11 @@ from app.schemas.analysis import AnalysisRecord, AnalysisRecordDetail
 from app.schemas.common import Page
 from app.schemas.errors import ErrorResponse
 from app.schemas.projects import (
+    CodeFileCreate,
     FileCreate,
     FileDetail,
+    FileImportRequest,
+    FileImportSkipped,
     FileMetadata,
     FileUpdate,
     FileVersionDetail,
@@ -68,6 +71,48 @@ def _saved(record: ProjectFile, analysis: Analysis | None) -> FileSaveResponse:
 )
 def create_file(project_id: uuid.UUID, data: FileCreate, service: FileServiceDep) -> FileSaveResponse:
     return _saved(*service.create(project_id, data))
+
+
+@router.post(
+    "/code-file",
+    response_model=FileSaveResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a code file from a file name (Coding: New File)",
+    description=(
+        "Creates an empty file at the project root. Only a file name is accepted (no folders, '.', '..', "
+        "absolute paths, or control characters) with a programming/development extension (.py, .js, .ts, "
+        ".java, .c, .cpp, .cs, .go, .rs, .html, .css, .sql, .json, .yaml, .md, ...). 409 `file_exists` if "
+        "it already exists (never overwritten); 422 `invalid_file_name` / `unsupported_file_type`."
+    ),
+)
+def create_code_file(
+    project_id: uuid.UUID, data: CodeFileCreate, service: FileServiceDep
+) -> FileSaveResponse:
+    return _saved(*service.create_code_file(project_id, data.name))
+
+
+class FileImportResponse(BaseModel):
+    created: list[FileMetadata]
+    skipped: list[FileImportSkipped]
+
+
+@router.post(
+    "/import",
+    response_model=FileImportResponse,
+    summary="Upload a batch of files from a local folder",
+    description=(
+        "Stores up to 100 files per request (the client sends a folder in batches). Each file is checked "
+        "on its own: unsafe paths, credentials files (.env, keys), dependency/build folders, files over "
+        "CODEWALK_MAX_SOURCE_BYTES, existing paths (never overwritten), and files beyond the project "
+        "file limit are skipped and listed with a reason. The stored files of a batch are committed "
+        "together. Run `POST /projects/{id}/analyze` afterwards for project intelligence."
+    ),
+)
+def import_files(
+    project_id: uuid.UUID, data: FileImportRequest, service: FileServiceDep
+) -> FileImportResponse:
+    created, skipped = service.import_files(project_id, data.files)
+    return FileImportResponse(created=[to_metadata(record) for record in created], skipped=list(skipped))
 
 
 @router.get("", response_model=Page[FileMetadata], summary="List files (metadata only, ordered by path)")

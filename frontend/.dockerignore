@@ -1,0 +1,12 @@
+node_modules
+.next
+public/monaco
+tsconfig.tsbuildinfo
+coverage
+Dockerfile
+.dockerignore
+.env
+.env.*
+!.env.example
+*.pem
+*.key

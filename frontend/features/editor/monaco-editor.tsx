@@ -4,6 +4,7 @@ import Editor from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import { useEffect, useRef } from "react";
 
+import { useTheme } from "@/features/theme/theme-context";
 import type { EditorSettings, ReplaceRequest, RevealRequest } from "@/features/workspace/state";
 import type { Diagnostic } from "@/types/diagnostics";
 
@@ -14,7 +15,7 @@ import {
   configureMonaco,
   modelUri,
   MONO_FONT_STACK,
-  THEME_NAME,
+  monacoTheme,
   toMarkers,
   type Monaco,
 } from "./monaco-setup";
@@ -49,7 +50,20 @@ export interface MonacoEditorProps {
  * Models are created lazily by @monaco-editor/react from `path` and disposed
  * here once their tab closes.
  */
+// Reveal requests carry an increasing nonce; each is applied once, even if the editor remounts.
+let lastAppliedReveal = 0;
+
+/** Moves the caret to a requested position, scrolls it into view, and focuses the editor. */
+function applyReveal(instance: editor.IStandaloneCodeEditor, reveal: RevealRequest): void {
+  lastAppliedReveal = Math.max(lastAppliedReveal, reveal.nonce);
+  const position = { lineNumber: reveal.line, column: reveal.column };
+  instance.setPosition(position);
+  instance.revealPositionInCenter(position);
+  instance.focus();
+}
+
 export default function MonacoEditor(props: MonacoEditorProps) {
+  const { theme } = useTheme();
   const { projectId, path, initialContent, language, settings, readOnly, openPaths, reveal } =
     props;
   const { diagnostics } = props;
@@ -94,7 +108,12 @@ export default function MonacoEditor(props: MonacoEditorProps) {
     reportCursor();
 
     latest.current.onReady(instance);
-    if (!document.activeElement?.closest('[role="tree"]')) instance.focus();
+    // A reveal requested before the editor existed (e.g. a search result opened while no file was
+    // open) was skipped by the effect below, which only runs on new requests: apply it now.
+    const pending = latest.current.reveal;
+    if (pending && pending.path === latest.current.path && pending.nonce > lastAppliedReveal)
+      applyReveal(instance, pending);
+    else if (!document.activeElement?.closest('[role="tree"]')) instance.focus();
   };
 
   // Dispose models whose tab was closed (or that belong to a previous project).
@@ -159,10 +178,7 @@ export default function MonacoEditor(props: MonacoEditorProps) {
   useEffect(() => {
     const instance = editorRef.current;
     if (!instance || !reveal || reveal.path !== path) return;
-    const position = { lineNumber: reveal.line, column: reveal.column };
-    instance.setPosition(position);
-    instance.revealPositionInCenter(position);
-    instance.focus();
+    applyReveal(instance, reveal);
   }, [reveal, path]);
 
   return (
@@ -170,7 +186,7 @@ export default function MonacoEditor(props: MonacoEditorProps) {
       path={modelUri(projectId, path)}
       defaultValue={initialContent}
       language={language}
-      theme={THEME_NAME}
+      theme={monacoTheme(theme)}
       keepCurrentModel
       saveViewState
       beforeMount={configureMonaco}

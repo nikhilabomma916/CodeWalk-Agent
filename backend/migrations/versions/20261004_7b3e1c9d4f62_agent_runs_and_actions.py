@@ -86,7 +86,10 @@ def upgrade() -> None:
             f"status IN ({_values(RUN_STATUSES)})", name=op.f("ck_agent_runs_agent_run_status")
         ),
         sa.ForeignKeyConstraint(
-            ["project_id"], ["projects.id"], name=op.f("fk_agent_runs_project_id_projects"), ondelete="CASCADE"
+            ["project_id"],
+            ["projects.id"],
+            name=op.f("fk_agent_runs_project_id_projects"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["user_id"], ["users.id"], name=op.f("fk_agent_runs_user_id_users"), ondelete="CASCADE"
@@ -120,7 +123,10 @@ def upgrade() -> None:
             ["file_id"], ["files.id"], name=op.f("fk_agent_actions_file_id_files"), ondelete="CASCADE"
         ),
         sa.ForeignKeyConstraint(
-            ["project_id"], ["projects.id"], name=op.f("fk_agent_actions_project_id_projects"), ondelete="CASCADE"
+            ["project_id"],
+            ["projects.id"],
+            name=op.f("fk_agent_actions_project_id_projects"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["run_id"], ["agent_runs.id"], name=op.f("fk_agent_actions_run_id_agent_runs"), ondelete="CASCADE"

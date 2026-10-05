@@ -65,10 +65,10 @@ def register(
     limiter: RegisterLimiterDep,
 ) -> UserResponse:
     key = f"register:{_client(request)}"
-    if (retry_after := limiter.retry_after(key)) is not None:
+    # Every attempt counts toward the limit (checked and recorded atomically).
+    if (retry_after := limiter.acquire(key)) is not None:
         audit("rate_limited", level=logging.WARNING, scope="register", client=_client(request))
         raise TooManyAttemptsError(retry_after)
-    limiter.record_failure(key)  # every attempt counts toward the limit
     user, token = auth.register(data)
     _set_session_cookie(response, settings, token)
     return UserResponse.model_validate(user)
@@ -93,13 +93,14 @@ def login(
     limiter: LoginLimiterDep,
 ) -> UserResponse:
     key = f"login:{_client(request)}:{data.email}"
-    if (retry_after := limiter.retry_after(key)) is not None:
+    # The attempt is counted before the password is checked, so simultaneous guesses cannot all
+    # pass the limit; a successful sign-in clears the count.
+    if (retry_after := limiter.acquire(key)) is not None:
         audit("rate_limited", level=logging.WARNING, scope="login", client=_client(request))
         raise TooManyAttemptsError(retry_after)
     try:
         user, token = auth.login(data)
     except InvalidCredentialsError:
-        limiter.record_failure(key)
         audit("login_failed", level=logging.WARNING, client=_client(request), account=fingerprint(data.email))
         raise
     limiter.reset(key)

@@ -40,10 +40,20 @@ def test_tools_have_permissions_and_no_write_tools() -> None:
         "get_file_content",
         "get_symbol",
         "explain_error",
+        "get_architecture",
+        "get_project_activity",
+        "analyze_impact",
+        "find_references",
+        "find_related_tests",
+        "record_finding",
         "propose_fix",
+        "propose_changes",
+        "propose_new_file",
     }
     assert {name for name, spec in TOOLS.items() if spec.permission is ToolPermission.PROPOSED_CHANGE} == {
-        "propose_fix"
+        "propose_fix",
+        "propose_changes",
+        "propose_new_file",
     }
     assert all(spec.permission is not ToolPermission.WRITE for spec in TOOLS.values())
     for spec in TOOLS.values():

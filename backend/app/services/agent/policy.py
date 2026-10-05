@@ -36,9 +36,13 @@ def call_key(tool: str, arguments: dict[str, Any]) -> str:
 @dataclass
 class ToolPolicy:
     max_actions: int
+    max_tool_calls: int = 1_000
     actions: int = 0
+    calls: int = 0
     executed: set[str] = field(default_factory=set)
     consecutive_failures: int = 0
+    # The project accepts no proposals (an uploaded project): proposal tools are denied outright.
+    read_only: bool = False
 
     def resolve(self, name: str | None) -> ToolSpec:
         spec = TOOLS.get(name or "")
@@ -49,6 +53,15 @@ class ToolPolicy:
         return spec
 
     def check(self, spec: ToolSpec, arguments: dict[str, Any]) -> str:
+        if self.calls >= self.max_tool_calls:
+            raise ToolDeniedError(
+                "tool_call_limit", f"At most {self.max_tool_calls} tool calls are allowed per request."
+            )
+        if spec.permission is ToolPermission.PROPOSED_CHANGE and self.read_only:
+            raise ToolDeniedError(
+                "read_only_project",
+                "This project was uploaded for analysis; answer the question without proposing changes.",
+            )
         if spec.permission is ToolPermission.PROPOSED_CHANGE and self.actions >= self.max_actions:
             raise ToolDeniedError(
                 "proposal_limit", f"At most {self.max_actions} changes can be proposed in one request."
@@ -59,6 +72,7 @@ class ToolPolicy:
         return key
 
     def succeeded(self, key: str, spec: ToolSpec) -> None:
+        self.calls += 1
         self.executed.add(key)
         self.consecutive_failures = 0
         if spec.permission is ToolPermission.PROPOSED_CHANGE:
@@ -66,8 +80,13 @@ class ToolPolicy:
 
     def failed(self, key: str | None = None) -> None:
         if key is not None:
+            self.calls += 1
             self.executed.add(key)
         self.consecutive_failures += 1
+
+    @property
+    def out_of_calls(self) -> bool:
+        return self.calls >= self.max_tool_calls
 
     @property
     def stuck(self) -> bool:

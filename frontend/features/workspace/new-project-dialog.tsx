@@ -230,7 +230,7 @@ export function NewProjectDialog({
           <button
             type="submit"
             disabled={busy}
-            className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-60"
+            className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-60"
           >
             {busy ? "Creating…" : "Create"}
           </button>

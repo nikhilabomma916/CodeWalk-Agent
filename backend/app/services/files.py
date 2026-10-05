@@ -8,21 +8,78 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from pathlib import PurePosixPath
 
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import AppError, ConflictError, NotFoundError
-from app.db.models import ActivityType, Analysis, FileVersion, FileVersionSource, Project, ProjectFile, User
+from app.core.exceptions import AppError, ConflictError, NotFoundError, UnsafePathError
+from app.db.models import (
+    ActivityType,
+    Analysis,
+    FileVersion,
+    FileVersionSource,
+    Project,
+    ProjectFile,
+    ProjectOrigin,
+    User,
+)
 from app.repositories.file_versions import FileVersionRepository
 from app.repositories.files import FileRepository
 from app.repositories.projects import ProjectRepository
-from app.schemas.projects import FileCreate, FileUpdate
+from app.schemas.common import RelativePath
+from app.schemas.projects import FileCreate, FileImportItem, FileImportSkipped, FileUpdate
 from app.services.activity import ActivityRecorder
 from app.services.analysis.service import AnalysisService
 from app.services.file_content import file_values
+from app.services.project_intelligence.scanner import DEFAULT_IGNORED_DIRECTORIES, is_secret_path
 from app.services.projects import ProjectService
+from app.utils.paths import normalize_relative_path
+
+_RELATIVE_PATH: TypeAdapter[str] = TypeAdapter(RelativePath)
+
+# Files a developer can create directly in Coding (programming and development files only).
+CODE_FILE_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".java",
+        ".c",
+        ".h",
+        ".cpp",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".cs",
+        ".go",
+        ".rs",
+        ".html",
+        ".css",
+        ".scss",
+        ".sql",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".md",
+    }
+)
+MAX_CODE_FILE_NAME_LENGTH = 255
+_FORBIDDEN_NAME_CHARACTERS = frozenset('<>:"|?*')
+
+
+class InvalidFileNameError(AppError):
+    status_code = 422
+    code = "invalid_file_name"
+
+
+class UnsupportedFileTypeError(AppError):
+    status_code = 422
+    code = "unsupported_file_type"
 
 
 class ContentTooLargeError(AppError):
@@ -81,7 +138,10 @@ class FileService:
         self.projects.get(project_id)
         return self.files.list_metadata(project_id, limit=limit, offset=offset)
 
-    def create(self, project_id: uuid.UUID, data: FileCreate) -> tuple[ProjectFile, Analysis | None]:
+    def create(
+        self, project_id: uuid.UUID, data: FileCreate, *, commit: bool = True
+    ) -> tuple[ProjectFile, Analysis | None]:
+        """``commit=False`` leaves the transaction open, so several saves can be committed together."""
         project = self._writable_project(project_id)
         self._check_size(data.content)
         if self.files.get_by_path(project_id, data.path) is not None:
@@ -98,16 +158,97 @@ class FileService:
                 details={"version": version},
             )
             self.project_repository.touch(project)
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
         except IntegrityError:
             self.session.rollback()
             raise ConflictError(f"{data.path} already exists.", code="file_exists") from None
         return record, analysis
 
+    def create_code_file(self, project_id: uuid.UUID, name: str) -> tuple[ProjectFile, Analysis | None]:
+        """Creates an empty code file at the project root from a file name only (Coding: "+ New File").
+
+        Stricter than the general file API: no folders, a programming/development extension, and
+        never an existing file (409). Uploaded projects are analysis copies and are not edited here.
+        """
+        if self.projects.get(project_id).origin is ProjectOrigin.UPLOAD:
+            raise ConflictError("Uploaded projects are read-only analysis copies.", code="project_read_only")
+        name = name.strip()
+        if not name:
+            raise InvalidFileNameError("Enter a file name, for example main.py.")
+        if len(name) > MAX_CODE_FILE_NAME_LENGTH:
+            raise InvalidFileNameError(f"File names can have at most {MAX_CODE_FILE_NAME_LENGTH} characters.")
+        if "/" in name or "\\" in name:
+            raise InvalidFileNameError("Enter a file name only, without folders.")
+        if name in {".", ".."} or any(ord(c) < 32 or ord(c) == 127 for c in name):
+            raise InvalidFileNameError("The file name contains characters that are not allowed.")
+        if any(c in _FORBIDDEN_NAME_CHARACTERS for c in name):
+            raise InvalidFileNameError('File names cannot contain < > : " | ? *.')
+        try:
+            normalize_relative_path(name)  # the shared path rules (absolute paths, drives, ..)
+        except UnsafePathError as exc:
+            raise InvalidFileNameError(exc.message) from None
+        if is_secret_path(name):
+            raise InvalidFileNameError("Credentials files such as .env are not created in Coding.")
+        if PurePosixPath(name).suffix.lower() not in CODE_FILE_EXTENSIONS:
+            raise UnsupportedFileTypeError(
+                "Unsupported file type. CodeWalk Coding supports programming and development files."
+            )
+        return self.create(project_id, FileCreate(path=name, content=""))
+
+    def import_files(
+        self, project_id: uuid.UUID, items: Sequence[FileImportItem]
+    ) -> tuple[Sequence[ProjectFile], Sequence[FileImportSkipped]]:
+        """Stores one batch of files uploaded from a local folder (all or nothing for the batch).
+
+        Each file is checked on its own: an unsafe path, a credentials file, a dependency/build
+        folder, oversized content, an existing path, or the project file limit skips that file with
+        a reason instead of failing the batch. Existing files are never overwritten.
+        """
+        self._writable_project(project_id)
+        existing = self.files.list_metadata(project_id, limit=1, offset=0)[1]
+        created: list[ProjectFile] = []
+        skipped: list[FileImportSkipped] = []
+        seen: set[str] = set()
+
+        def skip(path: str, reason: str, message: str) -> None:
+            skipped.append(FileImportSkipped(path=path, reason=reason, message=message))
+
+        for item in items:
+            try:
+                path = _RELATIVE_PATH.validate_python(item.path)
+            except ValidationError:
+                skip(item.path, "invalid_path", "The path is not a safe project-relative path.")
+                continue
+            folders = path.split("/")[:-1]
+            if is_secret_path(path):
+                skip(path, "secret", "Credentials files such as .env are never stored.")
+            elif any(folder in DEFAULT_IGNORED_DIRECTORIES for folder in folders):
+                skip(path, "ignored", "Dependency and build folders are not stored.")
+            elif len(item.content.encode("utf-8")) > self.settings.max_source_bytes:
+                skip(path, "too_large", f"Files over {self.settings.max_source_bytes} bytes are not stored.")
+            elif path in seen:
+                skip(path, "duplicate", "The same path appears twice in this upload.")
+            elif self.files.get_by_path(project_id, path) is not None:
+                skip(path, "exists", "A file with this path already exists; it was not overwritten.")
+            elif existing + len(created) >= self.settings.scan_max_files:
+                skip(path, "limit", f"The project already has {self.settings.scan_max_files} files.")
+            else:
+                seen.add(path)
+                record, _ = self.create(project_id, FileCreate(path=path, content=item.content), commit=False)
+                created.append(record)
+                continue
+            seen.add(path)
+        self.session.commit()
+        return created, skipped
+
     def update(
-        self, project_id: uuid.UUID, file_id: uuid.UUID, data: FileUpdate
+        self, project_id: uuid.UUID, file_id: uuid.UUID, data: FileUpdate, *, commit: bool = True
     ) -> tuple[ProjectFile, Analysis | None]:
-        return self._update(project_id, file_id, data, FileVersionSource.EDIT)
+        """``commit=False`` leaves the transaction open, so several saves can be committed together."""
+        return self._update(project_id, file_id, data, FileVersionSource.EDIT, commit=commit)
 
     def _update(
         self,
@@ -117,6 +258,7 @@ class FileService:
         source: FileVersionSource,
         *,
         restored_from: int | None = None,
+        commit: bool = True,
     ) -> tuple[ProjectFile, Analysis | None]:
         project = self._writable_project(project_id)
         record = self.get(project_id, file_id)
@@ -153,11 +295,15 @@ class FileService:
                 details=details,
             )
             self.project_repository.touch(project)
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
         except IntegrityError:
             self.session.rollback()
             raise ConflictError(f"{new_path} already exists.", code="file_exists") from None
-        self.session.refresh(record)
+        if commit:
+            self.session.refresh(record)
         return record, analysis
 
     def delete(self, project_id: uuid.UUID, file_id: uuid.UUID) -> None:

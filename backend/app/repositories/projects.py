@@ -13,7 +13,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Analysis, AnalysisType, Project, ProjectFile
+from app.db.models import Analysis, AnalysisType, Project, ProjectFile, ProjectOrigin
 
 
 @dataclass
@@ -30,9 +30,17 @@ class ProjectRepository:
         self.session = session
 
     def create(
-        self, *, owner_id: uuid.UUID, name: str, description: str | None, root_path: str | None
+        self,
+        *,
+        owner_id: uuid.UUID,
+        name: str,
+        description: str | None,
+        root_path: str | None,
+        origin: ProjectOrigin = ProjectOrigin.WORKSPACE,
     ) -> Project:
-        project = Project(owner_id=owner_id, name=name, description=description, root_path=root_path)
+        project = Project(
+            owner_id=owner_id, name=name, description=description, root_path=root_path, origin=origin
+        )
         self.session.add(project)
         self.session.flush()
         return project
@@ -47,8 +55,12 @@ class ProjectRepository:
             select(Project).where(Project.owner_id == owner_id, func.lower(Project.name) == name.lower())
         )
 
-    def list(self, owner_id: uuid.UUID, *, limit: int, offset: int) -> tuple[Sequence[Project], int]:
+    def list(
+        self, owner_id: uuid.UUID, *, limit: int, offset: int, origin: ProjectOrigin | None = None
+    ) -> tuple[Sequence[Project], int]:
         owned = Project.owner_id == owner_id
+        if origin is not None:
+            owned = owned & (Project.origin == origin)
         total = self.session.scalar(select(func.count()).select_from(Project).where(owned)) or 0
         items = self.session.scalars(
             select(Project)

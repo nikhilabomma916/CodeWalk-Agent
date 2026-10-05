@@ -5,7 +5,8 @@ import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
-import { THEME_NAME, configureMonaco } from "@/features/editor/monaco-setup";
+import { configureMonaco, monacoTheme } from "@/features/editor/monaco-setup";
+import { useTheme } from "@/features/theme/theme-context";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage } from "@/lib/languages";
 
@@ -32,6 +33,7 @@ export function ReviewDiff({
   original: string;
   modified: string;
 }) {
+  const { theme } = useTheme();
   const diffRef = useRef<editor.IStandaloneDiffEditor | null>(null);
   useEffect(
     () => () => {
@@ -53,7 +55,7 @@ export function ReviewDiff({
       original={original}
       modified={modified}
       language={detectLanguage(path)}
-      theme={THEME_NAME}
+      theme={monacoTheme(theme)}
       beforeMount={configureMonaco}
       onMount={(instance) => {
         diffRef.current = instance;
@@ -116,7 +118,7 @@ export function FixReview({ path }: { path: string }) {
           onClick={() => {
             if (!applyFix()) setMessage("The file changed after this suggestion was made.");
           }}
-          className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-white hover:bg-accent-strong disabled:opacity-50"
+          className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
         >
           Apply fix
         </button>

@@ -1,17 +1,19 @@
 "use client";
 
-import { Code2, FolderKanban, History } from "lucide-react";
+import { Code2, FolderKanban, FolderUp, History } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { LogoMark } from "@/components/ui/logo";
+import { ThemeToggle } from "@/features/theme/theme-context";
 
 import { UserMenu } from "./user-menu";
 
 export const NAV_ITEMS = [
   { href: "/app/coding", label: "Coding", icon: Code2 },
   { href: "/app/projects", label: "Projects", icon: FolderKanban },
+  { href: "/app/uploads", label: "Uploads", icon: FolderUp },
   { href: "/app/history", label: "History", icon: History },
 ] as const;
 
@@ -69,6 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </ul>
 
+        <ThemeToggle className="size-8 shrink-0 md:mb-1 md:size-auto md:h-8 md:w-full" />
         <UserMenu />
       </nav>
 

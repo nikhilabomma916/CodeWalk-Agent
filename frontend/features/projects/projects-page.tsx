@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderPlus, Link2, RefreshCw } from "lucide-react";
+import { FolderPlus, FolderUp, Link2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -28,6 +28,11 @@ function errorMessage(error: unknown, fallback: string): string {
   return isApiError(error) ? error.message : fallback;
 }
 
+/** Uploaded folders open in their read-only analysis view; workspace projects in Projects. */
+export function projectHref(project: ServerProject): string {
+  return project.origin === "upload" ? `/app/uploads/${project.id}` : `/app/projects/${project.id}`;
+}
+
 export function ProjectStatusBadges({ project }: { project: ServerProject }) {
   const badge = "rounded border px-1.5 py-px text-[10px] leading-4";
   return (
@@ -39,6 +44,15 @@ export function ProjectStatusBadges({ project }: { project: ServerProject }) {
         >
           <Link2 aria-hidden className="mr-0.5 inline size-3 align-[-2px]" />
           Linked folder
+        </span>
+      )}
+      {project.origin === "upload" && (
+        <span
+          className={`${badge} border-accent/50 text-accent-text`}
+          title="Uploaded from a local folder; analyzed read-only in Uploads."
+        >
+          <FolderUp aria-hidden className="mr-0.5 inline size-3 align-[-2px]" />
+          Uploaded
         </span>
       )}
       {project.stats.last_analyzed_at ? (
@@ -77,7 +91,10 @@ export function ProjectsPage() {
   const load = useCallback(async () => {
     setState({ status: "loading" });
     try {
-      const [projects, workspace] = await Promise.all([listProjects(), getWorkspaceFolders()]);
+      const [projects, workspace] = await Promise.all([
+        listProjects(), // workspace projects and folders uploaded from this computer
+        getWorkspaceFolders(),
+      ]);
       setState({
         status: "ready",
         projects,
@@ -171,7 +188,7 @@ export function ProjectsPage() {
           {state.projects.map((project) => (
             <li key={project.id}>
               <Link
-                href={`/app/projects/${project.id}`}
+                href={projectHref(project)}
                 className="grid gap-x-6 gap-y-1 px-4 py-3 hover:bg-surface-hover focus-visible:bg-surface-hover sm:grid-cols-[minmax(0,1fr)_auto]"
               >
                 <div className="min-w-0">

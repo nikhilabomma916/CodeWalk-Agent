@@ -59,7 +59,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
             __version__,
             settings.env.value,
             "on" if settings.docs_are_enabled else "off",
-            ",".join(settings.cors_origins) or "-",
+            ",".join(settings.allowed_origins) or "-",
         )
         ai_status = app.state.ai_service.status()
         logger.info(
@@ -103,7 +103,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         version=__version__,
         environment=settings.env.value,
         check_timeout_seconds=settings.health_check_timeout_seconds,
-        checks=[DatabaseHealthCheck(database)],
+        checks=[DatabaseHealthCheck(database, required=settings.is_production)],
     )
     app.state.database = database
     app.state.analysis_engine = AnalysisEngine.create_default(
@@ -124,14 +124,14 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
     register_exception_handlers(app)
 
     # Middleware added last runs first: CORS -> request context -> origin check -> body limit -> routes.
-    app.add_middleware(BodySizeLimitMiddleware, max_body_bytes=settings.max_request_body_bytes)
-    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.cors_origins)
+    app.add_middleware(BodySizeLimitMiddleware, max_body_bytes=settings.request_body_limit)
+    app.add_middleware(OriginCheckMiddleware, allowed_origins=settings.allowed_origins)
     app.add_middleware(
         RequestContextMiddleware, api_prefix=settings.api_v1_prefix, hsts=settings.is_production
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=settings.allowed_origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", REQUEST_ID_HEADER],

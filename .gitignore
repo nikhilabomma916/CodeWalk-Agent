@@ -2,8 +2,20 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.pem
 *.key
+*.crt
+*.p12
+*.pfx
+
+# ---- Deployment (Module 15): certificates, ACME files, database backups -------
+deploy/certs/*
+!deploy/certs/README.md
+deploy/acme/*
+!deploy/acme/README.md
+backups/
+*.dump
 
 # ---- Node / Next.js ---------------------------------------------------------
 node_modules/
@@ -72,6 +84,7 @@ downloads/
 eggs/
 .eggs/
 lib/
+!scripts/lib/
 lib64/
 parts/
 sdist/

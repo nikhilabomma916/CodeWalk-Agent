@@ -7,6 +7,7 @@ from collections.abc import Callable
 from app.core.config import Settings
 from app.services.ai.base import AIProvider
 from app.services.ai.providers.anthropic import AnthropicProvider
+from app.services.ai.providers.openai_compatible import OpenAICompatibleProvider
 
 DEFAULT_PROVIDER = "anthropic"
 
@@ -20,7 +21,18 @@ def _anthropic(settings: Settings) -> AIProvider:
     )
 
 
-PROVIDERS: dict[str, Callable[[Settings], AIProvider]] = {"anthropic": _anthropic}
+def _openai(settings: Settings) -> AIProvider:
+    credential = settings.ai_credential
+    return OpenAICompatibleProvider(
+        api_key=credential.get_secret_value() if credential else None,
+        model=settings.ai_model,
+        base_url=settings.ai_base_url,
+        timeout_seconds=settings.ai_timeout_seconds,
+    )
+
+
+# Provider-specific code stays in its module; everything else talks to the AIProvider protocol.
+PROVIDERS: dict[str, Callable[[Settings], AIProvider]] = {"anthropic": _anthropic, "openai": _openai}
 
 
 class UnknownProviderError(ValueError):

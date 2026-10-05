@@ -104,6 +104,11 @@ export interface WorkspaceActions {
   editFile(path: ProjectPath, content: string): void;
   saveFile(path: ProjectPath): Promise<boolean>;
   createFile(path: ProjectPath): Promise<void>;
+  /**
+   * Coding "+ New File": creates a code file from a file name only (at the project root) and opens it.
+   * Rejects with a SourceError ("exists", "invalid", "read-only", ...) for the dialog to show.
+   */
+  createCodeFile(name: string): Promise<void>;
   setLanguage(path: ProjectPath, language: LanguageId | null): void;
   updateSettings(settings: Partial<EditorSettings>): void;
   replaceDiagnostics(source: string, path: ProjectPath, diagnostics: Diagnostic[]): void;
@@ -127,6 +132,8 @@ export interface WorkspaceActions {
   analyzeServerProject(): Promise<void>;
   /** Loads the latest stored project intelligence, if any. */
   loadIntelligence(): Promise<void>;
+  /** Re-reads the file list (e.g. after an approved proposal created a file). */
+  refreshEntries(): Promise<void>;
 }
 
 interface WorkspaceContextValue {
@@ -332,6 +339,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       },
 
       async openServerProject(project) {
+        // Uploaded folders are analyzed in the Uploads area, never edited in Coding.
+        if (project.origin === "upload") return false;
         if (!(await confirmDiscardAll())) return false;
         await loadSource(new ServerProjectSource(project));
         return true;
@@ -342,12 +351,21 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (!id || sourceRef.current) return false;
         try {
           const project = await getProject(id);
-          if (sourceRef.current) return false;
+          if (sourceRef.current || project.origin === "upload") return false;
           await loadSource(new ServerProjectSource(project));
           return true;
         } catch (error) {
           if (isApiError(error) && error.status === 404) rememberServerProject(null);
           return false;
+        }
+      },
+
+      async refreshEntries() {
+        const source = sourceRef.current;
+        if (!source) return;
+        const listing = await source.list();
+        if (sourceRef.current === source) {
+          dispatch({ type: "project/entries-refreshed", entries: listing.entries });
         }
       },
 
@@ -421,6 +439,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (sourceRef.current !== source) return;
         dispatch({ type: "file/created", path });
         dispatch({ type: "tab/opened", path });
+      },
+
+      async createCodeFile(name) {
+        const source = sourceRef.current;
+        if (!source) return;
+        const fileName = name.trim();
+        if (source.createCodeFile) await source.createCodeFile(fileName);
+        else await source.createFile(fileName);
+        if (sourceRef.current !== source) return;
+        dispatch({ type: "file/created", path: fileName });
+        dispatch({ type: "tab/opened", path: fileName });
       },
 
       setLanguage(path, language) {

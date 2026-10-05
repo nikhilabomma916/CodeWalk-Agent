@@ -6,15 +6,17 @@ import { useState, type KeyboardEvent } from "react";
 import { IconButton } from "@/components/ui/icon-button";
 import { AgentPanel } from "@/features/agent/agent-panel";
 import { AIReviewPanel } from "@/features/ai/ai-review-panel";
+import { InsightsPanel } from "@/features/insights/insights-panel";
 import { IntelligencePanel } from "@/features/intelligence/intelligence-panel";
 import { ProblemsPanel, useAllDiagnostics } from "@/features/problems/problems-panel";
 
-type PanelTab = "problems" | "agent" | "ai" | "project";
-const TABS: PanelTab[] = ["problems", "agent", "ai", "project"];
+type PanelTab = "problems" | "agent" | "ai" | "insights" | "project";
+const TABS: PanelTab[] = ["problems", "agent", "ai", "insights", "project"];
 const TAB_LABEL: Record<PanelTab, string> = {
   problems: "Problems",
   agent: "Agent",
   ai: "AI Review",
+  insights: "Insights",
   project: "Project",
 };
 
@@ -70,6 +72,8 @@ export function BottomPanel({ onClose }: { onClose(): void }) {
           <AgentPanel />
         ) : tab === "ai" ? (
           <AIReviewPanel />
+        ) : tab === "insights" ? (
+          <InsightsPanel />
         ) : (
           <IntelligencePanel />
         )}

@@ -38,6 +38,28 @@ class FileVersionRepository:
         self.session.flush()
         return version
 
+    def add_initial(
+        self, files: Sequence[ProjectFile], *, source: FileVersionSource, author_id: uuid.UUID | None
+    ) -> None:
+        """Version 1 of files that were just added (not flushed yet): one flush for all of them.
+        New files have no earlier versions, so there is nothing to number after or to prune."""
+        for file in files:
+            if file.content is None or file.content_hash is None:
+                continue
+            self.session.add(
+                FileVersion(
+                    file=file,
+                    version=1,
+                    content=file.content,
+                    content_hash=file.content_hash,
+                    size=file.size,
+                    line_count=file.line_count,
+                    source=source,
+                    author_id=author_id,
+                )
+            )
+        self.session.flush()
+
     def list(self, file_id: uuid.UUID, *, limit: int, offset: int) -> tuple[Sequence[FileVersion], int]:
         """Newest first, without content."""
         total = (

@@ -17,6 +17,7 @@ import {
 } from "@/testing/fake-api";
 import type { Diagnostic } from "@/types/diagnostics";
 
+import { useAgent } from "./agent-context";
 import { AgentPanel } from "./agent-panel";
 import { AgentReview } from "./agent-review";
 
@@ -380,6 +381,28 @@ describe("Agent panel", () => {
         }),
       /stopped at a limit/,
     ],
+    [
+      "backend unreachable",
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+      /backend is not reachable/,
+    ],
+    [
+      "malformed response",
+      () => json({ unexpected: "shape" }),
+      /did not match the expected format/,
+    ],
+    [
+      "server error without details",
+      () => new Response("<html>Traceback (most recent call last): ...</html>", { status: 500 }),
+      /not valid JSON|HTTP 500/,
+    ],
+    [
+      "session expired",
+      () => apiError(401, "not_authenticated", "Sign in to continue."),
+      /Sign in to continue/,
+    ],
   ])("shows %s states", async (_name, respond, text) => {
     renderAgent([
       ["GET", /^\/agent\/status$/, () => STATUS(true)],
@@ -387,6 +410,8 @@ describe("Agent panel", () => {
     ]);
     await ask("Why?");
     expect(await screen.findByRole("alert")).toHaveTextContent(text);
+    expect(screen.queryByText(/Traceback/)).not.toBeInTheDocument(); // never a raw stack trace
+    expect(screen.getByRole("button", { name: "Ask agent" })).toBeEnabled(); // never stuck loading
   });
 
   it("can cancel a running request", async () => {
@@ -410,5 +435,230 @@ describe("Agent panel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Cancelled/);
     expect(screen.getByRole("button", { name: "Ask agent" })).toBeEnabled();
+  });
+});
+
+describe("Agent request races", () => {
+  const OLD = "OLD ANSWER from the first run";
+  const NEW = "NEW ANSWER from the second run";
+
+  /**
+   * Run 1 answers only when the test says so (a slow server) and, like a real fetch, rejects
+   * when aborted; `abortDelayMs` delays that rejection to model it settling after newer work
+   * has started. Run 2 answers at once. Nothing depends on how fast the test runs.
+   */
+  function slowFirstRun(abortDelayMs = 0) {
+    const routes = fakeBackend([
+      ...projectRoutes,
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+    ]);
+    let calls = 0;
+    let answerFirst: () => void = () => {};
+    const fetchImpl = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (!String(input).endsWith("/agent/run")) return routes(input, init);
+      calls += 1;
+      if (calls > 1) return Promise.resolve(json({ ...RUN, answer: NEW, actions: [] }));
+      return new Promise<Response>((resolve, reject) => {
+        answerFirst = () => resolve(json({ ...RUN, answer: OLD, actions: [] }));
+        init?.signal?.addEventListener("abort", () =>
+          setTimeout(() => reject(new DOMException("Aborted", "AbortError")), abortDelayMs),
+        );
+      });
+    }) as unknown as typeof fetch;
+    return { fetchImpl, answerFirst: () => answerFirst() };
+  }
+
+  it("a cancelled run frees the panel and its late answer never appears", async () => {
+    const { fetchImpl, answerFirst } = slowFirstRun();
+    renderAgent([], fetchImpl);
+    await ask("First question");
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Cancelled/);
+    await userEvent.clear(screen.getByLabelText("Ask about your project"));
+    await ask("Second question");
+    expect(await screen.findByText(NEW)).toBeInTheDocument();
+    answerFirst(); // the server's answer to the cancelled run arrives late
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(OLD)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cancelled/)).not.toBeInTheDocument();
+    expect(screen.getByText(NEW)).toBeInTheDocument();
+  });
+
+  it("never lets an older run that settles late overwrite a newer one", async () => {
+    // A second ask while the first is in flight (the context aborts the first itself); the
+    // first run's cancellation only settles after the second run has answered.
+    const { fetchImpl } = slowFirstRun(100);
+    function AskTwice() {
+      const { ask: askAgent } = useAgent();
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            void askAgent("First question", { includeFile: false, includeSelection: false });
+            void askAgent("Second question", { includeFile: false, includeSelection: false });
+          }}
+        >
+          ask-twice
+        </button>
+      );
+    }
+    vi.stubGlobal("fetch", fetchImpl);
+    render(
+      <WorkspaceProviders>
+        <Harness>
+          <AskTwice />
+          <AgentPanel />
+        </Harness>
+      </WorkspaceProviders>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "ask-twice" }));
+    expect(await screen.findByText(NEW)).toBeInTheDocument();
+    await new Promise((resolve) => setTimeout(resolve, 200)); // run 1's rejection lands now
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText(NEW)).toBeInTheDocument();
+  });
+});
+
+describe("Agent workflows (Module 17)", () => {
+  const FINDINGS = [
+    {
+      id: "F1",
+      severity: "low",
+      category: "maintainability",
+      title: "Loop could be a sum()",
+      file_path: PATH,
+      start_line: 2,
+      end_line: 3,
+      explanation: "A generator with sum() is clearer.",
+      evidence: "for item in items:",
+      suggestion: "Use sum(item.price for item in items).",
+      confidence: "medium",
+      excerpt: ["    for item in items:"],
+    },
+    {
+      id: "F2",
+      severity: "high",
+      category: "bug",
+      title: "total used before assignment",
+      file_path: PATH,
+      start_line: 3,
+      end_line: 3,
+      explanation: "Raises UnboundLocalError on the first item.",
+      evidence: "total += item.price",
+      suggestion: "Initialise total = 0.",
+      confidence: "high",
+      excerpt: ["        total += item.price"],
+    },
+  ];
+  const REVIEW_RUN = {
+    ...RUN,
+    mode: "review",
+    actions: [],
+    findings: FINDINGS,
+    usage: {
+      provider_calls: 3,
+      input_tokens: 1200,
+      output_tokens: 300,
+      tool_calls: 2,
+      largest_prompt_chars: 9000,
+    },
+    context: { files_inspected: [PATH, "shop/pricing.py"], memory_items: 2 },
+  };
+
+  it("runs the chosen workflow and shows findings by severity with their evidence", async () => {
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json(REVIEW_RUN)],
+    ]);
+    await userEvent.selectOptions(await screen.findByLabelText("Workflow"), "review");
+    await ask("Review this file");
+    const findings = await screen.findByRole("region", { name: "Review findings" });
+    expect(requestsOf(fetchMock).find((r) => r.path === "/agent/run")!.body.mode).toBe("review");
+    expect(within(findings).getByText(/1 high, 1 low/)).toBeInTheDocument();
+    const items = within(findings).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("high"); // highest severity first, labelled in text
+    expect(items[0]).toHaveTextContent("Evidence: total += item.price");
+    expect(
+      screen.getByText(/2 files inspected · 2 project note\(s\) · 3 model call\(s\), 1,500 tokens/),
+    ).toBeInTheDocument();
+  });
+
+  it("asks for a fix for one finding as a new request", async () => {
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json(REVIEW_RUN)],
+    ]);
+    await ask("Review this file");
+    const findings = await screen.findByRole("region", { name: "Review findings" });
+    await userEvent.click(within(findings).getAllByRole("button", { name: "Propose fix" })[0]);
+    await waitFor(() =>
+      expect(requestsOf(fetchMock).filter((r) => r.path === "/agent/run")).toHaveLength(2),
+    );
+    const second = requestsOf(fetchMock).filter((r) => r.path === "/agent/run")[1];
+    expect(second.body.mode).toBe("assist");
+    expect(String(second.body.message)).toContain("total used before assignment");
+    expect(String(second.body.message)).toContain(`${PATH}:3`);
+  });
+
+  it("applies a multi-file change only as a whole", async () => {
+    const other = { ...ACTION, id: "a2", file_path: "shop/pricing.py", summary: ACTION.summary };
+    const grouped = [ACTION, other].map((a) => ({
+      ...a,
+      group_id: "g1",
+      group_size: 2,
+      risk: "low",
+    }));
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json({ ...RUN, actions: grouped })],
+      [
+        "POST",
+        /^\/agent\/groups\/g1\/approve$/,
+        () =>
+          json({
+            group_id: "g1",
+            actions: grouped.map((a) => ({ ...a, status: "applied" })),
+            files: [
+              {
+                action_id: "a1",
+                file: { file_id: "f1", path: PATH, content: FIXED, content_hash: "h2", version: 2 },
+                diagnostic_count: 0,
+              },
+            ],
+          }),
+      ],
+      ["GET", /^\/projects\/p1\/files$/, () => json({ ...page([FILE]), limit: 5000 })],
+    ]);
+    await ask("Rename it");
+    const card = await screen.findByRole("listitem", { name: "Proposed change to 2 files" });
+    expect(within(card).getByText(/2 files, applied together · risk low/)).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+    await userEvent.click(within(card).getByRole("button", { name: "Apply all 2 files" }));
+    await waitFor(() => expect(screen.getByTestId("buffer").textContent).toBe(FIXED));
+    expect(requestsOf(fetchMock).some((r) => r.path === "/agent/groups/g1/approve")).toBe(true);
+    expect(requestsOf(fetchMock).some((r) => r.path.startsWith("/agent/actions/"))).toBe(false);
+  });
+
+  it("labels a new-file proposal and shows its content before it is created", async () => {
+    const created = {
+      ...ACTION,
+      id: "a3",
+      kind: "create_file",
+      file_path: "tests/test_cart.py",
+      summary: "Tests for cart_total",
+      diff: "--- /dev/null\n+++ b/tests/test_cart.py\n@@ -0,0 +1,2 @@\n+def test_empty():\n+    assert True\n",
+    };
+    renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json({ ...RUN, actions: [created] })],
+    ]);
+    await ask("Generate tests");
+    const card = await screen.findByRole("listitem", {
+      name: "Proposed new file tests/test_cart.py",
+    });
+    expect(within(card).getByText("new file")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Create file" })).toBeEnabled();
+    expect(within(card).queryByRole("button", { name: "Review diff" })).not.toBeInTheDocument();
+    expect(within(card).getByText("+def test_empty():")).toBeInTheDocument();
   });
 });

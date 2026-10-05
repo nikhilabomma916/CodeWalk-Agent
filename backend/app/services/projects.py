@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import audit
 from app.core.config import Settings
 from app.core.exceptions import AppError, ConflictError, NotFoundError
-from app.db.models import ActivityType, Project, User
+from app.db.models import ActivityType, Project, ProjectOrigin, User
 from app.repositories.projects import ProjectRepository, ProjectStatsRow
 from app.schemas.projects import (
     LanguageCount,
@@ -44,6 +44,7 @@ def to_response(project: Project, stats: ProjectStatsRow) -> ProjectResponse:
         description=project.description,
         root_path=project.root_path,
         read_only=project.root_path is not None,
+        origin=project.origin.value,
         created_at=project.created_at,
         updated_at=project.updated_at,
         stats=ProjectStats(
@@ -115,8 +116,10 @@ class ProjectService:
             raise NotFoundError("Project not found.", code="project_not_found")
         return project
 
-    def list(self, *, limit: int, offset: int) -> tuple[Sequence[Project], int]:
-        return self.projects.list(self.owner.id, limit=limit, offset=offset)
+    def list(
+        self, *, limit: int, offset: int, origin: ProjectOrigin | None = None
+    ) -> tuple[Sequence[Project], int]:
+        return self.projects.list(self.owner.id, limit=limit, offset=offset, origin=origin)
 
     def _ensure_name_available(self, name: str, *, exclude: uuid.UUID | None = None) -> None:
         existing = self.projects.get_by_name(self.owner.id, name)
@@ -129,7 +132,11 @@ class ProjectService:
             self.resolve_root(data.root_path)
         try:
             project = self.projects.create(
-                owner_id=self.owner.id, name=data.name, description=data.description, root_path=data.root_path
+                owner_id=self.owner.id,
+                name=data.name,
+                description=data.description,
+                root_path=data.root_path,
+                origin=ProjectOrigin(data.origin),
             )
             self.activity.record(
                 ActivityType.PROJECT_CREATED,

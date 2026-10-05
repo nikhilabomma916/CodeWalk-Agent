@@ -16,11 +16,14 @@ import { useCursor, type SelectionInfo } from "@/features/editor/cursor-context"
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import {
   decideAgentAction,
+  decideAgentGroup,
   getAgentStatus,
   runAgent,
   type AgentAction,
+  type AgentMode,
   type AgentRun,
   type AgentStatus,
+  type ReviewFinding,
 } from "@/services/api/agent";
 import { isApiError } from "@/services/api/errors";
 
@@ -29,6 +32,8 @@ export interface AskOptions {
   includeFile: boolean;
   /** Send the editor selection, when there is one. */
   includeSelection: boolean;
+  /** The workflow to run (Module 17); "assist" when omitted. */
+  mode?: AgentMode;
 }
 
 export type RunState =
@@ -51,6 +56,10 @@ interface AgentValue {
   decisions: Record<string, DecisionState>;
   approve(action: AgentAction): Promise<void>;
   reject(action: AgentAction): Promise<void>;
+  /** Approve or reject every file of a multi-file proposal together (keyed "group:<id>"). */
+  decideGroup(groupId: string, decision: "approve" | "reject"): Promise<void>;
+  /** Ask the agent for a fix for one review finding (a new, separate request). */
+  proposeFixFor(finding: ReviewFinding): Promise<void>;
   /** The proposal shown as a diff over the editor, if any. */
   reviewing: AgentAction | null;
   openReview(action: AgentAction): Promise<void>;
@@ -165,6 +174,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           code: fileReady ? buffer.content : undefined,
           selection: fileReady && options.includeSelection ? selectionRef.current : null,
           diagnostics,
+          mode: options.mode,
         },
         undefined,
         abort.signal,
@@ -202,6 +212,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         const result = await decideAgentAction(action.id, decision);
         replaceAction(result.action);
         if (result.file) actions.syncSavedContent(result.file.path, result.file.content);
+        if (result.file && result.action.kind === "create_file") void actions.refreshEntries();
         setDecisions(({ [action.id]: _, ...rest }) => rest);
       } catch (error) {
         if (isApiError(error) && error.code === "stale_action") {
@@ -212,6 +223,51 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       }
     },
     [actions, replaceAction],
+  );
+
+  const decideGroup = useCallback(
+    async (groupId: string, decision: "approve" | "reject") => {
+      const key = `group:${groupId}`;
+      setDecisions((current) => ({ ...current, [key]: { state: "busy" } }));
+      try {
+        const result = await decideAgentGroup(groupId, decision);
+        result.actions.forEach(replaceAction);
+        for (const applied of result.files)
+          actions.syncSavedContent(applied.file.path, applied.file.content);
+        if (result.files.some((f) => !stateRef.current.entries.some((e) => e.path === f.file.path)))
+          void actions.refreshEntries();
+        setDecisions(({ [key]: _, ...rest }) => rest);
+      } catch (error) {
+        if (isApiError(error) && error.code === "stale_action") {
+          setRun((current) =>
+            current.state === "ready"
+              ? {
+                  ...current,
+                  run: {
+                    ...current.run,
+                    actions: current.run.actions.map((a) =>
+                      a.group_id === groupId ? { ...a, status: "stale" } : a,
+                    ),
+                  },
+                }
+              : current,
+          );
+        }
+        const { message } = messageFor(error, `Could not ${decision} the change.`);
+        setDecisions((current) => ({ ...current, [key]: { state: "error", message } }));
+      }
+    },
+    [actions, replaceAction],
+  );
+
+  const proposeFixFor = useCallback(
+    (finding: ReviewFinding) =>
+      ask(
+        `Propose a minimal fix for this review finding (${finding.severity} ${finding.category}): ` +
+          `"${finding.title}" at ${finding.file_path}:${finding.start_line}. Evidence: ${finding.evidence}`,
+        { includeFile: false, includeSelection: false, mode: "assist" },
+      ),
+    [ask],
   );
 
   const openReview = useCallback(
@@ -233,12 +289,27 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       decisions,
       approve: (action) => decide(action, "approve"),
       reject: (action) => decide(action, "reject"),
+      decideGroup,
+      proposeFixFor,
       reviewing,
       openReview,
       closeReview: () => setReviewing(null),
       selection,
     }),
-    [ask, cancel, decide, decisions, openReview, refreshStatus, reviewing, run, selection, status],
+    [
+      ask,
+      cancel,
+      decide,
+      decideGroup,
+      decisions,
+      openReview,
+      proposeFixFor,
+      refreshStatus,
+      reviewing,
+      run,
+      selection,
+      status,
+    ],
   );
 
   return <AgentContext.Provider value={value}>{children}</AgentContext.Provider>;

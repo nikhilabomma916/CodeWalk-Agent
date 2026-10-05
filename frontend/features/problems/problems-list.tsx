@@ -57,7 +57,7 @@ const ProblemRow = memo(function ProblemRow({
           type="button"
           onClick={() => onExplain(diagnostic)}
           aria-label={`Explain with AI: ${diagnostic.message}`}
-          className={`mr-1 shrink-0 rounded px-1.5 py-0.5 text-[11px] text-accent hover:bg-surface-hover focus-visible:opacity-100 ${
+          className={`mr-1 shrink-0 rounded px-1.5 py-0.5 text-[11px] text-accent-text hover:bg-surface-hover focus-visible:opacity-100 ${
             selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"
           }`}
         >
