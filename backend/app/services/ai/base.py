@@ -61,6 +61,15 @@ class AIProviderError(AIError):
     code = "ai_provider_error"
 
 
+# Specific AIProviderError codes, so the user sees the actual reason (never a credential):
+#   ai_quota_exceeded (account has no credit), ai_auth_failed (key rejected),
+#   ai_model_unavailable (model not available to the account).
+QUOTA_MESSAGE = (
+    "The AI provider account has no credit or quota left. Add credit or billing with the provider, "
+    "then try again."
+)
+
+
 class AIContextTooLargeError(AIError):
     status_code = 413
     code = "ai_context_too_large"

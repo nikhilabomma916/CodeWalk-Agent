@@ -18,6 +18,7 @@ from typing import Any
 import anthropic
 
 from app.services.ai.base import (
+    QUOTA_MESSAGE,
     AIContextTooLargeError,
     AIMalformedResponseError,
     AIProviderError,
@@ -100,18 +101,26 @@ class AnthropicProvider:
             ) from None
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError):
             logger.warning("Anthropic rejected the configured credential")
-            raise AIProviderError("The AI provider rejected the server's credential.") from None
+            raise AIProviderError(
+                "The AI provider rejected the server's API key (authentication failed).",
+                code="ai_auth_failed",
+            ) from None
         except anthropic.NotFoundError:
-            raise AIProviderError(f"The AI model {self.model!r} is not available to this account.") from None
+            raise AIProviderError(
+                f"The AI model {self.model!r} is not available to this account.", code="ai_model_unavailable"
+            ) from None
         except anthropic.APIStatusError as exc:
             logger.warning("Anthropic API error: status %s (request %s)", exc.status_code, exc.request_id)
+            if exc.status_code in (400, 402) and "credit balance" in str(exc.message).lower():
+                raise AIProviderError(QUOTA_MESSAGE, code="ai_quota_exceeded") from None
             if exc.status_code == 413:
                 raise AIContextTooLargeError("The request is too large for the AI provider.") from None
             if exc.status_code >= 500:
                 raise AIUnavailableError("The AI provider is temporarily unavailable.") from None
             raise AIProviderError("The AI provider rejected the request.") from None
-        except anthropic.APIConnectionError:
-            raise AIUnavailableError("The AI provider could not be reached.") from None
+        except anthropic.APIConnectionError as exc:
+            logger.warning("Anthropic could not be reached (%s)", type(exc.__cause__ or exc).__name__)
+            raise AIUnavailableError("The AI provider could not be reached (network error).") from None
 
         request_id = getattr(response, "_request_id", None)
         if response.stop_reason == "refusal":

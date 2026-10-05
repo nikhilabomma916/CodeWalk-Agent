@@ -174,9 +174,34 @@ describe("Explain with AI", () => {
       <ProblemsPanel />,
     );
     await userEvent.click(await screen.findByRole("button", { name: /Explain with AI/ }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "AI unavailable: AI assistance is turned off on this server.",
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("AI unavailable");
+    expect(alert).toHaveTextContent("Reason: AI is turned off on this server");
+    expect(alert).toHaveTextContent("AI assistance is turned off on this server.");
+  });
+
+  it("names the reason when the provider account has no quota", async () => {
+    renderWith(
+      [
+        ["GET", /^\/ai\/status$/, () => status(true)],
+        [
+          "POST",
+          /^\/ai\/explain$/,
+          () =>
+            apiError(
+              502,
+              "ai_quota_exceeded",
+              "The AI provider account has no credit or quota left. Add credit or billing with the provider, then try again.",
+            ),
+        ],
+      ],
+      <ProblemsPanel />,
     );
+    await userEvent.click(await screen.findByRole("button", { name: /Explain with AI/ }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("AI unavailable");
+    expect(alert).toHaveTextContent("Reason: provider quota exceeded");
+    expect(alert).not.toHaveTextContent(/try again shortly/i);
   });
 
   it("reports provider errors", async () => {

@@ -146,6 +146,28 @@ def test_http_errors_are_normalized(status: int, error: type[AIError]) -> None:
     assert "secret detail" not in excinfo.value.message
 
 
+@pytest.mark.parametrize(
+    ("status", "error_type", "text", "code"),
+    [
+        (
+            400,
+            "invalid_request_error",
+            "Your credit balance is too low to access the Anthropic API.",
+            "ai_quota_exceeded",
+        ),
+        (401, "authentication_error", "invalid x-api-key", "ai_auth_failed"),
+        (404, "not_found_error", "model: x", "ai_model_unavailable"),
+        (400, "invalid_request_error", "messages: field required", "ai_provider_error"),
+    ],
+)
+def test_failures_carry_a_specific_reason_code(status: int, error_type: str, text: str, code: str) -> None:
+    body = {"type": "error", "error": {"type": error_type, "message": text}}
+    provider = provider_with(lambda _: httpx2.Response(status, json=body))
+    with pytest.raises(AIError) as excinfo:
+        provider.generate_structured(request())
+    assert excinfo.value.code == code
+
+
 def test_timeout_and_network_failures() -> None:
     def timeout(req: httpx2.Request) -> httpx2.Response:
         raise httpx2.ReadTimeout("timed out", request=req)

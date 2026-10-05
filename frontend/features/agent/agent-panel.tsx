@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
 
+import { AiErrorNotice } from "@/features/ai/ai-common";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import {
   AGENT_MODES,
@@ -423,9 +424,7 @@ function RunView({ run }: { run: AgentRun }) {
         </div>
       )}
       {run.status === "failed" && run.error && (
-        <p role="alert" className="text-xs text-danger">
-          {run.error.message}
-        </p>
+        <AiErrorNotice code={run.error.code} message={run.error.message} />
       )}
       {run.status === "limit_reached" && !run.answer && (
         <p role="alert" className="text-xs text-warning">
@@ -611,11 +610,7 @@ export function AgentPanel() {
             Working on “{run.message.slice(0, 80)}”… <Elapsed startedAt={run.startedAt} />
           </p>
         )}
-        {run.state === "error" && (
-          <p role="alert" className="text-xs text-danger">
-            {run.message}
-          </p>
-        )}
+        {run.state === "error" && <AiErrorNotice code={run.code} message={run.message} />}
         {run.state === "ready" && <RunView run={run.run} />}
       </section>
     </div>

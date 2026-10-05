@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 
 import { buttonClass } from "@/components/ui/page-frame";
+import { AiErrorNotice } from "@/features/ai/ai-common";
 import type { OpenLocation } from "@/features/insights/insights-panel";
 import { plural } from "@/lib/format";
 import {
@@ -31,7 +32,7 @@ type Remote<T> =
   | { state: "idle" }
   | { state: "loading" }
   | { state: "ready"; data: T }
-  | { state: "error"; message: string };
+  | { state: "error"; message: string; code?: string };
 
 function message(error: unknown, fallback: string): string {
   return isApiError(error) ? error.message : fallback;
@@ -45,14 +46,6 @@ function Spinner({ text }: { text: string }) {
   return (
     <p role="status" className="flex items-center gap-1.5 text-xs text-fg-muted">
       <Loader2 aria-hidden className="size-3.5 animate-spin" /> {text}
-    </p>
-  );
-}
-
-function ErrorText({ text }: { text: string }) {
-  return (
-    <p role="alert" className="text-xs text-danger">
-      {text}
     </p>
   );
 }
@@ -128,7 +121,12 @@ export function ProjectAsk({
       setRun({ state: "ready", data });
     } catch (e) {
       if (controller.signal.aborted) setRun({ state: "idle" });
-      else setRun({ state: "error", message: message(e, "The agent could not answer.") });
+      else
+        setRun({
+          state: "error",
+          message: message(e, "The agent could not answer."),
+          code: isApiError(e) ? e.code : undefined,
+        });
     } finally {
       abort.current = null;
     }
@@ -217,7 +215,7 @@ export function ProjectAsk({
       </form>
 
       {running && <Spinner text="The agent is reading the project…" />}
-      {run.state === "error" && <ErrorText text={run.message} />}
+      {run.state === "error" && <AiErrorNotice code={run.code} message={run.message} />}
       {run.state === "ready" && <AgentAnswer run={run.data} onOpen={onOpen} />}
     </div>
   );
@@ -240,7 +238,7 @@ export function AgentAnswer({ run, onOpen }: { run: AgentRun; onOpen?: OpenLocat
     );
   return (
     <section aria-label="Agent answer" className="space-y-2 border-t border-border pt-2 text-xs">
-      {run.error && <ErrorText text={run.error.message} />}
+      {run.error && <AiErrorNotice code={run.error.code} message={run.error.message} />}
       {run.answer && <div className="whitespace-pre-wrap text-fg">{run.answer}</div>}
       {run.findings.length > 0 && (
         <div>
