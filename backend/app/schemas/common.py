@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Annotated
 
 from pydantic import AfterValidator, BaseModel, Field
@@ -13,14 +14,22 @@ from app.utils.paths import normalize_relative_path
 
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 MAX_SEGMENT_LENGTH = 255
+# Invisible or direction-changing characters (bidi overrides such as U+202E, zero-width spaces,
+# line/paragraph separators, C1 controls) make names display as something else ("Trojan Source"):
+# a file could look like another, or two different paths could look identical.
+_DECEPTIVE_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+
+
+def _has_deceptive_characters(value: str) -> bool:
+    return any(unicodedata.category(character) in _DECEPTIVE_CATEGORIES for character in value)
 
 
 def _validate_name(value: str) -> str:
     value = value.strip()
     if not value:
         raise ValueError("must not be empty")
-    if _CONTROL_CHARACTERS.search(value):
-        raise ValueError("must not contain control characters")
+    if _CONTROL_CHARACTERS.search(value) or _has_deceptive_characters(value):
+        raise ValueError("must not contain control or invisible formatting characters")
     return value
 
 
@@ -33,6 +42,10 @@ def _validate_relative_path(value: str) -> str:
         raise ValueError(f"path segments must be at most {MAX_SEGMENT_LENGTH} characters")
     if _CONTROL_CHARACTERS.search(normalized) or any(c in normalized for c in '<>:"|?*'):
         raise ValueError("path contains characters that are not allowed")
+    if _has_deceptive_characters(normalized):
+        raise ValueError("path contains invisible or direction-changing characters")
+    if any(segment != segment.strip() for segment in normalized.split("/")):
+        raise ValueError("path segments must not start or end with spaces")
     return normalized
 
 

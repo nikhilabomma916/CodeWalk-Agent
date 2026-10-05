@@ -31,7 +31,7 @@ from app.core.audit import audit
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.metrics import METRICS
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import RateLimiter
 from app.db.models import (
     ActivityType,
     AgentAction,
@@ -133,7 +133,7 @@ class AgentService:
         settings: Settings,
         owner: User,
         ai: AIService,
-        limiter: AttemptLimiter,
+        limiter: RateLimiter,
         search: ProjectSearchService,
         context_builder: ProjectContextBuilder,
         engine: AnalysisEngine,

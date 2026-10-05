@@ -495,3 +495,19 @@ class ProjectMemory(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     text: Mapped[str] = mapped_column(String(500), nullable=False)
 
     __table_args__ = (Index("ix_project_memories_project_id_created_at", "project_id", "created_at"),)
+
+
+class RateLimitEvent(Base):
+    """One counted attempt for a shared rate limit (Module 21; see app.core.rate_limit).
+
+    Not tied to a user: keys are SHA-256 hashes of the limit's namespace and key (client address,
+    email address or user id). Rows outside every window are deleted by the limiter.
+    """
+
+    __tablename__ = "rate_limit_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_rate_limit_events_key_hash_occurred_at", key_hash, occurred_at),)

@@ -29,7 +29,7 @@ from app.core.config import AI_PROVIDERS, Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.logging import request_id_var
 from app.core.metrics import timed
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import AttemptLimiter, RateLimiter
 from app.db.models import ActivityType, Analysis, AnalysisStatus, AnalysisType, Project, ProjectFile, User
 from app.repositories.analyses import AnalysisRepository
 from app.repositories.files import FileRepository
@@ -109,7 +109,8 @@ class AIService:
 
     def __init__(self, settings: Settings, provider: AIProvider | None = None) -> None:
         self.settings = settings
-        self.limiter = AttemptLimiter(settings.ai_max_requests, settings.ai_window_seconds)
+        # Replaced by a shared (PostgreSQL) limiter in create_app when a database is configured.
+        self.limiter: RateLimiter = AttemptLimiter(settings.ai_max_requests, settings.ai_window_seconds)
         self.provider: AIProvider | None = provider
         self.provider_problem: str | None = None
         if provider is None and settings.ai_enabled:

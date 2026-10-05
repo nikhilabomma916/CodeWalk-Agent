@@ -206,6 +206,9 @@ class Settings(BaseSettings):
     # Failed logins allowed per client address and email within the window (then HTTP 429).
     login_max_attempts: int = Field(default=10, ge=1, le=1000)
     login_window_seconds: int = Field(default=900, ge=1, le=86_400)
+    # Per account, from any address (credential stuffing spread over many addresses). Higher
+    # than the per-address limit so an attacker cannot cheaply lock a real user out.
+    login_account_max_attempts: int = Field(default=50, ge=1, le=10_000)
     # Registrations allowed per client address within the window (then HTTP 429).
     register_max_attempts: int = Field(default=20, ge=1, le=10_000)
     register_window_seconds: int = Field(default=3600, ge=1, le=86_400)
