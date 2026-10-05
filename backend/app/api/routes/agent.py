@@ -7,19 +7,23 @@ No endpoint applies a change except ``approve``, which re-validates it first.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from app.api.deps import AgentActionServiceDep, AgentServiceDep
+from app.db.models import AgentActionStatus
 from app.schemas.agent import (
     ActionDecisionResponse,
+    AgentActionOut,
     AgentEvent,
     AgentRunOut,
     AgentRunRequest,
     AgentStatusResponse,
     GroupDecisionResponse,
+    UndoResponse,
 )
+from app.schemas.common import Page
 from app.schemas.errors import ErrorResponse
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -150,3 +154,42 @@ def approve_group(group_id: uuid.UUID, service: AgentActionServiceDep) -> GroupD
 )
 def reject_group(group_id: uuid.UUID, service: AgentActionServiceDep) -> GroupDecisionResponse:
     return service.reject_group(group_id)
+
+
+@router.get(
+    "/actions",
+    response_model=Page[AgentActionOut],
+    summary="AI change history of a project",
+    description=(
+        "Every change the agent proposed in one of your projects (newest first): what, why, the file, "
+        "the diff, and what happened to it (pending, applied, rejected, stale; `result.undone` once "
+        "undone)."
+    ),
+    responses={**_AUTH, **_NOT_FOUND},
+)
+def list_actions(
+    service: AgentActionServiceDep,
+    project_id: uuid.UUID,
+    status: Annotated[AgentActionStatus | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> Page[AgentActionOut]:
+    items, total = service.list_actions(
+        project_id, status=status.value if status else None, limit=limit, offset=offset
+    )
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post(
+    "/actions/{action_id}/undo",
+    response_model=UndoResponse,
+    summary="Undo an applied AI change",
+    description=(
+        "Only when the file was not changed after the AI change: an edit is reverted by restoring the "
+        "previous version (recorded as a new version, so nothing is lost); a file the agent created is "
+        "deleted. Otherwise 409 `undo_not_possible` with the reason."
+    ),
+    responses={**_AUTH, **_NOT_FOUND, 409: {"model": ErrorResponse, "description": "Cannot be undone."}},
+)
+def undo_action(action_id: uuid.UUID, service: AgentActionServiceDep) -> UndoResponse:
+    return service.undo(action_id)

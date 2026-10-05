@@ -405,11 +405,16 @@ def test_stale_proposals_are_never_applied(make_client: Callable[..., Any]) -> N
     assert run_again["actions"][0]["result"]["reason"] == "content_changed"
 
 
-def test_deleted_file_makes_the_proposal_disappear(make_client: Callable[..., Any]) -> None:
+def test_deleted_file_makes_the_proposal_stale(make_client: Callable[..., Any]) -> None:
     client, project, body = propose_run(make_client)
     action = body["actions"][0]
     client.delete(f"/api/v1/projects/{project['id']}/files/{project['files']['shop/cart.py']}")
-    assert client.post(f"/api/v1/agent/actions/{action['id']}/approve").status_code == 404
+    # The proposal stays in the AI change history, but can no longer be applied.
+    refused = client.post(f"/api/v1/agent/actions/{action['id']}/approve")
+    assert refused.status_code == 409
+    assert refused.json()["error"]["code"] == "stale_action"
+    listing = client.get(f"/api/v1/projects/{project['id']}/files").json()["items"]
+    assert "shop/cart.py" not in {f["path"] for f in listing}  # nothing was recreated
 
 
 def test_invalid_and_excessive_proposals(make_client: Callable[..., Any]) -> None:

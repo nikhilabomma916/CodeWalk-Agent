@@ -6,14 +6,16 @@ import { useState, type KeyboardEvent } from "react";
 import { IconButton } from "@/components/ui/icon-button";
 import { AgentPanel } from "@/features/agent/agent-panel";
 import { AIReviewPanel } from "@/features/ai/ai-review-panel";
+import { FileHistoryPanel } from "@/features/history/file-history-panel";
 import { InsightsPanel } from "@/features/insights/insights-panel";
 import { IntelligencePanel } from "@/features/intelligence/intelligence-panel";
 
-type AssistantTab = "agent" | "review" | "insights" | "project";
-const TABS: AssistantTab[] = ["agent", "review", "insights", "project"];
+type AssistantTab = "agent" | "review" | "history" | "insights" | "project";
+const TABS: AssistantTab[] = ["agent", "review", "history", "insights", "project"];
 const TAB_LABEL: Record<AssistantTab, string> = {
   agent: "Agent",
   review: "AI Review",
+  history: "History",
   insights: "Insights",
   project: "Project",
 };
@@ -77,6 +79,8 @@ export function RightSidebar({ onClose }: { onClose(): void }) {
           <AgentPanel />
         ) : tab === "review" ? (
           <AIReviewPanel />
+        ) : tab === "history" ? (
+          <FileHistoryPanel />
         ) : tab === "insights" ? (
           <InsightsPanel />
         ) : (

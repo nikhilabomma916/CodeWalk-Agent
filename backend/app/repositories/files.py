@@ -6,10 +6,10 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, defer
 
-from app.db.models import ProjectFile
+from app.db.models import AgentAction, ProjectFile
 
 
 class FileRepository:
@@ -97,13 +97,24 @@ class FileRepository:
         self.session.flush()
         return record
 
+    def _keep_ai_history(self, file_ids: Any) -> None:
+        """AI changes stay in the history when their file is deleted (path, summary and diff are
+        kept on the action; only the link to the deleted file is cleared)."""
+        self.session.execute(
+            update(AgentAction).where(AgentAction.file_id.in_(file_ids)).values(file_id=None)
+        )
+
     def delete(self, record: ProjectFile) -> None:
+        self._keep_ai_history([record.id])
         self.session.delete(record)
         self.session.flush()
 
     def delete_paths(self, project_id: uuid.UUID, paths: Sequence[str]) -> int:
         if not paths:
             return 0
+        self._keep_ai_history(
+            select(ProjectFile.id).where(ProjectFile.project_id == project_id, ProjectFile.path.in_(paths))
+        )
         result = self.session.execute(
             delete(ProjectFile).where(ProjectFile.project_id == project_id, ProjectFile.path.in_(paths))
         )

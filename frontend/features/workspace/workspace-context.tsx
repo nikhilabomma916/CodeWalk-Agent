@@ -201,6 +201,8 @@ export interface WorkspaceActions {
   saveToServer(options?: {
     onProgress?(progress: UploadProgress): void;
   }): Promise<UploadOutcome & { project: ServerProject }>;
+  /** The server id of a file of the open server project (null otherwise). */
+  serverFileId(path: ProjectPath): string | null;
   /** Opens a project stored by the backend. Resolves false if the user kept the current one. */
   openServerProject(project: ServerProject): Promise<boolean>;
   /** Reopens the server project used last (after a page reload); false if none/unavailable. */
@@ -582,6 +584,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (sourceRef.current !== source) return;
         dispatch({ type: "file/created", path: fileName });
         dispatch({ type: "tab/opened", path: fileName });
+      },
+
+      serverFileId(path) {
+        const source = sourceRef.current;
+        return source instanceof ServerProjectSource ? source.idOf(path) : null;
       },
 
       async createFolder(path) {

@@ -258,6 +258,12 @@ class AppliedFile(BaseModel):
     version: int | None
 
 
+class UndoResponse(BaseModel):
+    action: AgentActionOut
+    file: AppliedFile | None = Field(default=None, description="The restored file (an undone edit).")
+    deleted: bool = Field(default=False, description="True when an AI-created file was removed.")
+
+
 class ActionDecisionResponse(BaseModel):
     action: AgentActionOut
     file: AppliedFile | None = Field(default=None, description="The saved file, after an approval.")

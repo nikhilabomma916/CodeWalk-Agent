@@ -75,6 +75,11 @@ export class ServerProjectSource implements ProjectSource {
     return { entries, skipped: 0, truncated: false };
   }
 
+  /** The server id of a file, or null when it is not (yet) known. */
+  idOf(path: ProjectPath): string | null {
+    return this.fileIds.get(path) ?? null;
+  }
+
   private fileId(path: ProjectPath): string {
     const id = this.fileIds.get(path);
     if (!id) throw new SourceError("not-found", `${path} is not on the server.`);

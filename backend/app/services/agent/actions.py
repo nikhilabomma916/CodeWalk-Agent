@@ -43,10 +43,12 @@ from app.repositories.analyses import DiagnosticRepository
 from app.repositories.files import FileRepository
 from app.schemas.agent import (
     ActionDecisionResponse,
+    AgentActionOut,
     AppliedFile,
     AppliedGroupFile,
     GroupDecisionResponse,
     ProposedChange,
+    UndoResponse,
 )
 from app.schemas.ai import CodeEdit
 from app.schemas.analysis import StoredDiagnostic
@@ -84,6 +86,10 @@ class StaleActionError(AppError):
 class _StaleError(Exception):
     reason: str
     message: str
+
+
+class UndoNotPossibleError(ConflictError):
+    code = "undo_not_possible"
 
 
 @dataclass
@@ -333,6 +339,65 @@ class AgentActionService:
         return ActionDecisionResponse(
             action=action_out(action), file=applied.file, diagnostics=self._diagnostics[action.id]
         )
+
+    # --- AI change history ------------------------------------------------------------------------
+
+    def list_actions(
+        self, project_id: uuid.UUID, *, status: str | None, limit: int, offset: int
+    ) -> tuple[list[AgentActionOut], int]:
+        """The AI changes proposed in one of the developer's projects, newest first."""
+        self.projects.get(project_id)  # 404 for another user's project
+        query = select(AgentAction).where(
+            AgentAction.project_id == project_id, AgentAction.user_id == self.owner.id
+        )
+        if status is not None:
+            query = query.where(AgentAction.status == status)
+        total = int(self.session.scalar(select(func.count()).select_from(query.subquery())) or 0)
+        rows = self.session.scalars(
+            query.order_by(AgentAction.created_at.desc()).limit(limit).offset(offset)
+        ).all()
+        return [action_out(row, self._group_size(row)) for row in rows], total
+
+    def undo(self, action_id: uuid.UUID) -> UndoResponse:
+        """Reverts an applied AI change if the file was not changed since: an edit restores the
+        version before it (as a new version, so this can be undone too); a created file is deleted."""
+        action = self._owned(action_id)
+        result = dict(action.result or {})
+        if action.status != AgentActionStatus.APPLIED or result.get("undone"):
+            raise UndoNotPossibleError("Only an applied AI change can be undone, once.")
+        project = self._writable(action.project_id)
+        record = self.session.get(ProjectFile, action.file_id) if action.file_id else None
+        if record is None or record.project_id != project.id:
+            raise UndoNotPossibleError(f"{action.file_path} no longer exists.")
+        current = self.session.scalar(
+            select(func.max(FileVersion.version)).where(FileVersion.file_id == record.id)
+        )
+        if current is None or current != result.get("version"):
+            raise UndoNotPossibleError(
+                f"{record.path} changed after this AI change; restore an earlier version from the "
+                "file's history instead."
+            )
+        file: AppliedFile | None = None
+        deleted = False
+        if result.get("created"):
+            self.files.delete(project.id, record.id)  # the action itself stays in the history
+            action.file_id = None
+            deleted = True
+        else:
+            saved, _ = self.files.restore_version(project.id, record.id, current - 1)
+            file = AppliedFile(
+                file_id=saved.id,
+                path=saved.path,
+                content=saved.content or "",
+                content_hash=saved.content_hash or "",
+                version=self.session.scalar(
+                    select(func.max(FileVersion.version)).where(FileVersion.file_id == saved.id)
+                ),
+            )
+        action.result = {**result, "undone": True, "undone_at": datetime.now(UTC).isoformat()}
+        self.session.commit()
+        audit("agent_action_undone", user=self.owner.id, action=action.id, deleted=deleted)
+        return UndoResponse(action=action_out(action, self._group_size(action)), file=file, deleted=deleted)
 
     def reject(self, action_id: uuid.UUID) -> ActionDecisionResponse:
         action = self._owned(action_id)

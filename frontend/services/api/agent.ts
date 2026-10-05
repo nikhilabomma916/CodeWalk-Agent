@@ -171,6 +171,45 @@ const decisionSchema = z.object({
 });
 export type ActionDecision = z.infer<typeof decisionSchema>;
 
+const actionPageSchema = z.object({
+  items: z.array(actionSchema),
+  total: z.number(),
+  limit: z.number(),
+  offset: z.number(),
+});
+
+/** The AI change history of a project, newest first. */
+export async function listAgentActions(
+  projectId: string,
+  client: ApiClient = apiClient,
+): Promise<{ items: AgentAction[]; total: number }> {
+  const params = new URLSearchParams({ project_id: projectId, limit: "100" });
+  const { data } = await client.request(`/agent/actions?${params.toString()}`, {
+    schema: actionPageSchema,
+  });
+  return { items: data.items, total: data.total };
+}
+
+const undoSchema = z.object({
+  action: actionSchema,
+  file: decisionSchema.shape.file,
+  deleted: z.boolean(),
+});
+export type UndoResult = z.infer<typeof undoSchema>;
+
+/** Undoes an applied AI change (only if the file was not changed since). */
+export async function undoAgentAction(
+  actionId: string,
+  client: ApiClient = apiClient,
+): Promise<UndoResult> {
+  const { data } = await client.request(`/agent/actions/${encodeURIComponent(actionId)}/undo`, {
+    method: "POST",
+    schema: undoSchema,
+    timeoutMs: 60_000,
+  });
+  return data;
+}
+
 const groupDecisionSchema = z.object({
   group_id: z.string(),
   actions: z.array(actionSchema),

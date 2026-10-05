@@ -271,6 +271,36 @@ const fileVersionSchema = z.object({
 
 export type FileVersion = z.infer<typeof fileVersionSchema>;
 
+const fileVersionSummarySchema = fileVersionSchema.omit({ content: true });
+export type FileVersionSummary = z.infer<typeof fileVersionSummarySchema>;
+
+/** Saved versions of a file, newest first (without content). */
+export async function listFileVersions(
+  projectId: string,
+  fileId: string,
+  client: ApiClient = apiClient,
+): Promise<FileVersionSummary[]> {
+  const { data } = await client.request(
+    `/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/versions?limit=100`,
+    { schema: page(fileVersionSummarySchema) },
+  );
+  return data.items;
+}
+
+/** Makes an earlier version current (recorded as a new "restore" version). Returns the saved file. */
+export async function restoreFileVersion(
+  projectId: string,
+  fileId: string,
+  version: number,
+  client: ApiClient = apiClient,
+): Promise<{ path: string; content: string }> {
+  const { data } = await client.request(
+    `/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/versions/${version}/restore`,
+    { method: "POST", schema: fileSaveSchema, timeoutMs: 30_000 },
+  );
+  return { path: data.file.path, content: data.file.content ?? "" };
+}
+
 export async function getFileVersion(
   projectId: string,
   fileId: string,
