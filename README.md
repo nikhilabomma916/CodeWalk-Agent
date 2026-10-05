@@ -395,6 +395,11 @@ docker compose --profile app stop            # data is kept; never "down -v" unl
 
 ## Deployment (Module 15)
 
+For a public deployment (Vercel frontend and backend services, managed PostgreSQL with pgvector,
+preview/production environments, `python -m app.preflight`, and the backed-up migration script
+`scripts/migrate-database.mjs`), see [docs/deployment/production.md](docs/deployment/production.md).
+Self-hosting with Docker Compose is described below.
+
 A production-oriented Docker stack: PostgreSQL 17 + pgvector, a one-shot migration job, the FastAPI
 backend and the Next.js frontend as non-root, read-only containers, and an nginx reverse proxy
 (the only published service) with HTTPS support, request limits, timeouts and security headers

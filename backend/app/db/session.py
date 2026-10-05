@@ -32,8 +32,11 @@ class Database:
         pool_size: int = 5,
         connect_timeout: int = 5,
         statement_timeout_seconds: float | None = None,
+        prepared_statements: bool = True,
     ) -> None:
         connect_args: dict[str, Any] = {"connect_timeout": connect_timeout}
+        if not prepared_statements:
+            connect_args["prepare_threshold"] = None  # transaction-mode connection poolers
         if statement_timeout_seconds is not None:
             connect_args["options"] = f"-c statement_timeout={round(statement_timeout_seconds * 1000)}"
         self.engine: Engine = create_engine(
@@ -56,6 +59,7 @@ class Database:
             pool_size=settings.database_pool_size,
             connect_timeout=settings.database_connect_timeout_seconds,
             statement_timeout_seconds=settings.database_statement_timeout_seconds,
+            prepared_statements=settings.database_prepared_statements,
         )
 
     @contextmanager

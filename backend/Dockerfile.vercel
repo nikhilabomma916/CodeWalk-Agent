@@ -67,6 +67,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     CODEWALK_PORT=8000 \
     CODEWALK_NODE_BINARY=/usr/local/bin/node \
     CODEWALK_CORS_ORIGINS="" \
+    CODEWALK_LOG_FORMAT=json \
     FORWARDED_ALLOW_IPS=*
 
 USER codewalk:codewalk

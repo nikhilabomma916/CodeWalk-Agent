@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     database_url: SecretStr | None = None
     database_pool_size: int = Field(default=5, ge=1, le=100)
     database_connect_timeout_seconds: int = Field(default=5, ge=1, le=60)
+    # psycopg prepares statements that run often. Connection poolers in transaction mode (for
+    # example Supabase's pooler on port 6543, or PgBouncer without prepared-statement support)
+    # move connections between clients, and prepared statements then fail. Set false for them.
+    database_prepared_statements: bool = True
     # Longest a single SQL statement may run before PostgreSQL cancels it (the request then fails
     # with a 503 instead of holding a pooled connection indefinitely). Migrations are not affected.
     database_statement_timeout_seconds: float = Field(default=30.0, ge=1, le=3600)
