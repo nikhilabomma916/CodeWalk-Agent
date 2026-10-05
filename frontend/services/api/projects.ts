@@ -105,6 +105,24 @@ export async function updateProject(
   return data;
 }
 
+/**
+ * Imports an uploaded folder into Coding: a new, editable project with a copy of its files. The
+ * upload itself is kept unchanged.
+ */
+export async function createEditableCopy(
+  uploadId: string,
+  name?: string,
+  client: ApiClient = apiClient,
+): Promise<ServerProject> {
+  const { data } = await client.request(`/projects/${encodeURIComponent(uploadId)}/editable-copy`, {
+    method: "POST",
+    body: name ? { name } : {},
+    schema: projectSchema,
+    timeoutMs: 120_000,
+  });
+  return data;
+}
+
 export async function deleteProject(id: string, client: ApiClient = apiClient): Promise<void> {
   await client.request(`/projects/${encodeURIComponent(id)}`, {
     method: "DELETE",

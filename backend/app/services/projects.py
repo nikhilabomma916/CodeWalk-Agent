@@ -126,6 +126,15 @@ class ProjectService:
         if existing is not None and existing.id != exclude:
             raise ConflictError(f'A project named "{existing.name}" already exists.', code="project_exists")
 
+    def available_name(self, wanted: str, *, suffix: str = "editable") -> str:
+        """``wanted`` if free, else "wanted (editable)", "wanted (editable 2)", ... within 100 chars."""
+        candidates = [wanted] + [f" ({suffix})"] + [f" ({suffix} {n})" for n in range(2, 100)]
+        for i, candidate in enumerate(candidates):
+            name = candidate if i == 0 else wanted[: 100 - len(candidate)].rstrip() + candidate
+            if self.projects.get_by_name(self.owner.id, name) is None:
+                return name
+        raise ConflictError(f'Too many projects are named like "{wanted}".', code="project_exists")
+
     def create(self, data: ProjectCreate) -> Project:
         self._ensure_name_available(data.name)
         if data.root_path is not None:

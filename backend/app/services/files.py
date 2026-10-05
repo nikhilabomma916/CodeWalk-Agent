@@ -198,6 +198,19 @@ class FileService:
             )
         return self.create(project_id, FileCreate(path=name, content=""))
 
+    def copy_files(self, source_id: uuid.UUID, target_id: uuid.UUID) -> int:
+        """Copies every stored file of the developer's project ``source_id`` into ``target_id`` (one
+        transaction; each file is created like a normal save: version 1, analysis, activity)."""
+        self.projects.get(source_id)  # ownership: 404 for another user's project
+        copied = 0
+        for record in self.files.list_all(source_id):
+            if record.content is None:  # listed but not stored (binary or too large when scanned)
+                continue
+            self.create(target_id, FileCreate(path=record.path, content=record.content), commit=False)
+            copied += 1
+        self.session.commit()
+        return copied
+
     def import_files(
         self, project_id: uuid.UUID, items: Sequence[FileImportItem]
     ) -> tuple[Sequence[ProjectFile], Sequence[FileImportSkipped]]:

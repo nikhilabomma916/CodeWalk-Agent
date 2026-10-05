@@ -16,6 +16,7 @@ import { GitHubImportPanel } from "./github-import-panel";
 import { formatDate, formatRelativeTime, plural } from "@/lib/format";
 import { isApiError } from "@/services/api/errors";
 import { deleteProject, listProjects, type ServerProject } from "@/services/api/projects";
+import { OpenInCodingIconButton } from "./open-in-coding";
 
 type ListState =
   | { status: "loading" }
@@ -25,6 +26,7 @@ type ListState =
 /**
  * Module 18: folders uploaded from this computer. They are kept apart from the Coding workspace and
  * the Projects list, and are analyzed read-only (search, architecture, impact, questions to the agent).
+ * "Open in Coding" imports one as an editable Coding project (a copy; the upload stays unchanged).
  */
 export function UploadsPage() {
   const router = useRouter();
@@ -125,8 +127,8 @@ export function UploadsPage() {
       )}
       {state.status === "ready" && state.projects.length === 0 && (
         <StateMessage title="No uploads yet" action={uploadButton("Upload a folder")}>
-          Upload a project folder from this computer to analyze it and ask questions about it. It is
-          kept separate from your Coding projects, and the agent never changes its files.
+          Upload a project folder from this computer to analyze it and ask questions about it. The
+          upload is kept as you sent it; choose Open in Coding to work on an editable copy.
         </StateMessage>
       )}
       {state.status === "ready" && state.projects.length > 0 && (
@@ -162,6 +164,7 @@ export function UploadsPage() {
                   </dd>
                 </dl>
               </Link>
+              <OpenInCodingIconButton upload={project} />
               <IconButton label={`Delete ${project.name}`} onClick={() => void remove(project)}>
                 <Trash2 aria-hidden className="size-4" />
               </IconButton>

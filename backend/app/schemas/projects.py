@@ -33,6 +33,16 @@ class ProjectCreate(BaseModel):
         return self
 
 
+class EditableCopyRequest(BaseModel):
+    """Import an uploaded folder into Coding: an editable copy; the upload itself is kept unchanged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: ProjectName | None = Field(
+        default=None, description="Name of the new project (default: the upload's, made unique)."
+    )
+
+
 class ProjectUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

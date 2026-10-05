@@ -211,6 +211,43 @@ describe("Upload analysis view", () => {
     );
   });
 
+  it("imports the upload into Coding as an editable copy and opens it", async () => {
+    const fetchMock = renderWith(<UploadDetailPage projectId="u1" />, [
+      ...detailRoutes(),
+      agentStatus(false),
+      [
+        "POST",
+        /^\/projects\/u1\/editable-copy$/,
+        () =>
+          json(
+            makeProject({ id: "c9", name: `${UPLOAD.name} (editable)`, origin: "workspace" }),
+            201,
+          ),
+      ],
+    ]);
+    await userEvent.click(await screen.findByRole("button", { name: "Open in Coding" }));
+    await waitFor(() =>
+      expect(navigation.router.push).toHaveBeenCalledWith("/app/coding?project=c9"),
+    );
+    expect(requestsOf(fetchMock).some((r) => r.path === "/projects/u1/editable-copy")).toBe(true);
+  });
+
+  it("reports when the import fails and stays on the upload", async () => {
+    renderWith(<UploadDetailPage projectId="u1" />, [
+      ...detailRoutes(),
+      agentStatus(false),
+      [
+        "POST",
+        /^\/projects\/u1\/editable-copy$/,
+        () => json({ error: { code: "project_exists", message: "Too many projects." } }, 409),
+      ],
+    ]);
+    await userEvent.click(await screen.findByRole("button", { name: "Open in Coding" }));
+    expect(await screen.findByText("Too many projects.")).toBeInTheDocument();
+    expect(navigation.router.push).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open in Coding" })).toBeEnabled();
+  });
+
   it("does not show workspace projects", async () => {
     renderWith(<UploadDetailPage projectId="u1" />, [
       ...detailRoutes({ ...UPLOAD, origin: "workspace" }),

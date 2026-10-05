@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { buttonClass, PageFrame } from "@/components/ui/page-frame";
+import { OpenInCodingButton } from "@/features/uploads/open-in-coding";
 import { ProjectAsk, type AskModeOption } from "@/features/agent/project-ask";
 import { StateMessage } from "@/components/ui/state-message";
 import {
@@ -411,6 +412,7 @@ export function UploadDetailPage({ projectId }: { projectId: string }) {
             <RefreshCw aria-hidden className="size-3.5" />
             {analyzing ? "Analyzing…" : "Re-analyze"}
           </button>
+          <OpenInCodingButton upload={data} />
         </>
       }
     >

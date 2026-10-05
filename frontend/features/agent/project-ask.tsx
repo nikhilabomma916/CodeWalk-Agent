@@ -208,7 +208,7 @@ export function ProjectAsk({
           )}
           <span className="text-[11px] text-fg-subtle">
             {readOnly
-              ? "The agent reads this upload only and never changes it."
+              ? "The agent reads this upload only. To change code, use Open in Coding (an editable copy)."
               : "The agent answers what you ask; nothing is changed from here."}
           </span>
         </div>
