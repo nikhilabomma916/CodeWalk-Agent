@@ -1,5 +1,8 @@
 # Environment configuration
 
+This page covers Docker Compose. For the prepared Vercel setup (services, `PORT`, `VERCEL_*` origins) see
+[vercel.md](vercel.md).
+
 Three places hold configuration, with different rules:
 
 | Where | Read by | May contain secrets? |
@@ -69,11 +72,12 @@ never reach the frontend image (`npm run test:infra` scans the built bundle).
 | Limit | Value | Where |
 | --- | --- | --- |
 | Source file size (analysis, storage) | 2 MiB | backend `CODEWALK_MAX_SOURCE_BYTES` |
-| Request body | 6 MiB, JSON 413 | backend `CODEWALK_MAX_REQUEST_BODY_BYTES` |
+| Request body | 6 MiB, JSON 413 (at most 4.5 MB on Vercel) | backend `CODEWALK_MAX_REQUEST_BODY_BYTES` |
 | Request body (outer cap) | 8 MiB, JSON 413 | nginx `client_max_body_size` |
 | AI request | 90 s | `CODEWALK_AI_TIMEOUT_SECONDS`; proxy read timeout 120 s |
 | Agent run | 240 s, 8 steps, 3 proposed changes | `CODEWALK_AGENT_*`; proxy read timeout 300 s |
 | Analyzer per file | 10 s | `CODEWALK_ANALYSIS_TIMEOUT_SECONDS` |
 | Database connect | 5 s | `CODEWALK_DATABASE_CONNECT_TIMEOUT_SECONDS` |
 | One SQL statement | 30 s | `CODEWALK_DATABASE_STATEMENT_TIMEOUT_SECONDS` |
+| Draining requests on SIGTERM | 20 s, then the TypeScript worker and pool close | `CODEWALK_SHUTDOWN_TIMEOUT_SECONDS` (below the 30 s `stop_grace_period`) |
 | Rate limits | login 10/15 min, register 20/h, AI 30/10 min, agent 20/10 min, per process | `CODEWALK_*_MAX_*` |

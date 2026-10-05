@@ -6,8 +6,15 @@ import { MAX_EDITABLE_FILE_BYTES, MAX_PROJECT_ENTRIES, SourceError } from "./sou
 
 /** Files per upload request (the server accepts at most 100). */
 export const UPLOAD_BATCH_FILES = 100;
-/** Bytes per upload request, kept well below the server's request body limit (6 MB by default). */
+/**
+ * Request body bytes (the JSON as sent) per upload request: below Vercel's 4.5 MB request body
+ * limit and the API's own limit (6 MB by default, capped at 4.5 MB on Vercel).
+ */
 export const UPLOAD_BATCH_BYTES = 4 * 1024 * 1024;
+/** The largest request ever sent; a file that does not fit even on its own is skipped. */
+export const UPLOAD_REQUEST_MAX_BYTES = 4_500_000;
+/** `{"files":[` and `]}` around the entries. */
+const REQUEST_ENVELOPE_BYTES = 12;
 
 export interface SkippedFile {
   path: string;
@@ -108,10 +115,16 @@ export async function uploadFolder(
       done += 1;
       continue;
     }
-    const bytes = encoder.encode(content).length + path.length + 32;
+    // JSON escaping can double the text (quotes, backslashes, newlines), so measure what is sent.
+    const bytes = encoder.encode(JSON.stringify({ path, content })).length + 1;
+    if (bytes + REQUEST_ENVELOPE_BYTES > UPLOAD_REQUEST_MAX_BYTES) {
+      skipped.push({ path, reason: "too large to upload once encoded (over 4.5 MB)" });
+      done += 1;
+      continue;
+    }
     if (
       batch.length >= UPLOAD_BATCH_FILES ||
-      (batch.length > 0 && batchBytes + bytes > UPLOAD_BATCH_BYTES)
+      (batch.length > 0 && REQUEST_ENVELOPE_BYTES + batchBytes + bytes > UPLOAD_BATCH_BYTES)
     ) {
       await send();
       signal?.throwIfAborted();

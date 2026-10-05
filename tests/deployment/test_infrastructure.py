@@ -197,7 +197,7 @@ def _final_stage(dockerfile: Path) -> list[str]:
 
 @pytest.mark.parametrize(
     "dockerfile",
-    ["backend/Dockerfile", "frontend/Dockerfile", "deploy/nginx/Dockerfile"],
+    ["backend/Dockerfile", "backend/Dockerfile.vercel", "frontend/Dockerfile", "deploy/nginx/Dockerfile"],
 )
 def test_dockerfiles_bake_in_no_secrets(dockerfile: str) -> None:
     text = (ROOT / dockerfile).read_text(encoding="utf-8")
@@ -209,7 +209,9 @@ def test_dockerfiles_bake_in_no_secrets(dockerfile: str) -> None:
     assert not re.search(r"COPY[^\n]*\.env", text)
 
 
-@pytest.mark.parametrize("dockerfile", ["backend/Dockerfile", "frontend/Dockerfile"])
+@pytest.mark.parametrize(
+    "dockerfile", ["backend/Dockerfile", "backend/Dockerfile.vercel", "frontend/Dockerfile"]
+)
 def test_final_stage_runs_as_non_root(dockerfile: str) -> None:
     users = [line.split()[1] for line in _final_stage(ROOT / dockerfile) if line.upper().startswith("USER ")]
     assert users, f"{dockerfile} final stage sets no USER"

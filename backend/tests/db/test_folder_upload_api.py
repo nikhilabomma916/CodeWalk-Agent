@@ -6,6 +6,7 @@ stores credentials, dependency folders, unsafe paths, or oversized content, and 
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -142,3 +143,87 @@ def test_project_file_limit_is_enforced(database_url: str, engine: Engine) -> No
         body = _upload(client, project["id"], {"a.py": "", "b.py": "", "c.py": ""}).json()
     assert [f["path"] for f in body["created"]] == ["a.py", "b.py"]
     assert [s["reason"] for s in body["skipped"]] == ["limit"]
+
+
+# --- Request size: the browser batches stay under Vercel's 4.5 MB request body limit -------------
+
+VERCEL_BODY_LIMIT = 4_500_000
+MAX_SOURCE = 2 * 1024 * 1024
+
+
+def _vercel_sized_client(database_url: str) -> TestClient:
+    """The real app with the request body limit the API has behind Vercel."""
+    app = build_app(
+        database_url=database_url, max_request_body_bytes=VERCEL_BODY_LIMIT, max_source_bytes=MAX_SOURCE
+    )
+    return TestClient(app)
+
+
+def test_a_batch_just_under_the_request_limit_is_stored(database_url: str, engine: Engine) -> None:
+    files = {"big/a.py": "a" * 2_000_000 + "\n", "big/b.py": "b" * 2_000_000 + "\n", "small.py": "x = 1\n"}
+    body = {"files": [{"path": p, "content": c} for p, c in files.items()]}
+    assert VERCEL_BODY_LIMIT - 600_000 < len(json.dumps(body)) < VERCEL_BODY_LIMIT
+    with _vercel_sized_client(database_url) as client:
+        register(client)
+        project = _project(client)
+        response = _upload(client, project["id"], files)
+        assert response.status_code == 200, response.text[:300]
+        assert sorted(f["path"] for f in response.json()["created"]) == ["big/a.py", "big/b.py", "small.py"]
+        stored = client.get(f"/api/v1/projects/{project['id']}/files").json()["items"]
+        assert {f["path"]: f["size"] for f in stored}["big/a.py"] == 2_000_001
+
+
+def test_a_batch_over_the_request_limit_is_refused_and_nothing_is_stored(
+    database_url: str, engine: Engine
+) -> None:
+    files = {f"part{i}.py": str(i) * 1_600_000 for i in range(3)}  # each file is allowed; the request is not
+    with _vercel_sized_client(database_url) as client:
+        register(client)
+        project = _project(client)
+        response = _upload(client, project["id"], files)
+        assert response.status_code == 413
+        assert response.json()["error"]["code"] == "payload_too_large"
+        assert client.get(f"/api/v1/projects/{project['id']}/files").json()["total"] == 0
+
+
+def test_malformed_uploads_are_rejected_without_storing_anything(api: TestClient) -> None:
+    project = _project(api)
+    url = f"/api/v1/projects/{project['id']}/files/import"
+    json_headers = {"Content-Type": "application/json"}
+    payload: dict[str, Any]
+    assert api.post(url, content=b'{"files": [{"path": "a.py", "con', headers=json_headers).status_code == 422
+    for payload in (
+        {},
+        {"files": []},
+        {"files": "a.py"},
+        {"files": [{"path": "a.py"}]},  # no content
+        {"files": [{"path": "", "content": "x"}]},
+        {"files": [{"path": "a.py", "content": 1}]},
+        {"files": [{"path": "a.py", "content": "x", "mode": "755"}]},  # unknown field
+    ):
+        response = api.post(url, json=payload)
+        assert response.status_code == 422, payload
+        assert response.json()["error"]["code"] == "validation_error"
+    assert api.get(f"/api/v1/projects/{project['id']}/files").json()["total"] == 0
+
+
+def test_uploads_stay_inside_their_project(api: TestClient, other_user: TestClient) -> None:
+    first = _project(api, "First")
+    second = _project(api, "Second")
+    theirs = _project(other_user, "Theirs")
+    assert _upload(api, first["id"], {"src/app.py": "first = 1\n"}).status_code == 200
+    assert _upload(api, second["id"], {"src/app.py": "second = 2\n"}).status_code == 200
+    assert _upload(other_user, theirs["id"], {"src/app.py": "theirs = 3\n"}).status_code == 200
+
+    def content(client: TestClient, project_id: str) -> str:
+        items = client.get(f"/api/v1/projects/{project_id}/files").json()["items"]
+        assert [f["path"] for f in items] == ["src/app.py"]
+        detail = client.get(f"/api/v1/projects/{project_id}/files/{items[0]['id']}").json()
+        value: str = detail["content"]
+        return value
+
+    assert content(api, first["id"]) == "first = 1\n"
+    assert content(api, second["id"]) == "second = 2\n"
+    assert content(other_user, theirs["id"]) == "theirs = 3\n"
+    assert _upload(api, theirs["id"], {"src/other.py": "x = 1\n"}).status_code == 404
+    assert api.get(f"/api/v1/projects/{theirs['id']}/files").status_code == 404

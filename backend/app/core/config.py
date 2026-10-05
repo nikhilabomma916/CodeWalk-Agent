@@ -7,10 +7,12 @@ they never appear in ``repr()`` output, logs, or API responses.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -21,6 +23,26 @@ REPO_ROOT = BACKEND_DIR.parent
 # Later files override earlier ones: the repository-level .env is shared with
 # the frontend, backend/.env can hold backend-only overrides.
 ENV_FILES = (REPO_ROOT / ".env", BACKEND_DIR / ".env")
+
+# A bare host name as Vercel provides it in VERCEL_URL and friends, e.g. "codewalk-abc123.vercel.app".
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOST_NAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(?:\.{_LABEL})+$")
+
+# Vercel Functions refuse request bodies over 4.5 MB (413 FUNCTION_PAYLOAD_TOO_LARGE, not this API's
+# JSON error) before the application sees them. On Vercel the API's own limit is capped at that.
+VERCEL_MAX_REQUEST_BODY_BYTES = 4_500_000
+
+AI_PROVIDERS = ("anthropic", "openai", "gemini", "openrouter", "ollama")
+# Model ids as providers spell them: "gpt-5", "gemini-2.5-pro", "vendor/model", "llama3.1:8b".
+_MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def _credential_free_url(value: str, *, schemes: tuple[str, ...]) -> bool:
+    """An absolute URL with one of ``schemes``, a host, and no user:password part."""
+    parsed = urlsplit(value)
+    return parsed.scheme in schemes and bool(parsed.hostname) and parsed.username is None
+
 
 INSECURE_SECRET_KEYS = frozenset({"", "change-me", "changeme", "secret", "dev-secret-key"})
 MIN_PRODUCTION_SECRET_KEY_LENGTH = 32
@@ -72,16 +94,30 @@ class Settings(BaseSettings):
     # AI assistance (analysis, explanations, fix suggestions). Off unless enabled AND a provider
     # credential is present; deterministic analysis never depends on it.
     ai_enabled: bool = False
-    ai_provider: str | None = None  # "anthropic" (default when unset)
-    ai_model: str | None = None  # provider default when unset
-    # Provider credential. CODEWALK_AI_API_KEY wins; otherwise ANTHROPIC_API_KEY is used.
+    # One provider, chosen explicitly: anthropic (default when unset), openai, gemini, openrouter or
+    # ollama. There is no fallback to another provider when the chosen one fails.
+    ai_provider: str | None = None
+    ai_model: str | None = None  # provider default when unset (only Anthropic has one)
+    # Provider credential. CODEWALK_AI_API_KEY wins; otherwise the selected provider's own variable
+    # (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY). Never another provider's.
     ai_api_key: SecretStr | None = None
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
-    # Module 17 (experimental): CODEWALK_AI_PROVIDER=openai talks to an OpenAI-compatible API.
+    # Module 17: CODEWALK_AI_PROVIDER=openai talks to an OpenAI-compatible API.
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     ai_base_url: str | None = None  # OpenAI-compatible server; https only (http for localhost)
+    # Module 19: Gemini (Google's OpenAI-compatible endpoint), OpenRouter, and a self-hosted Ollama.
+    gemini_api_key: SecretStr | None = Field(default=None, validation_alias="GEMINI_API_KEY")
+    openrouter_api_key: SecretStr | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
+    openrouter_model: str | None = Field(default=None, validation_alias="OPENROUTER_MODEL")
+    openrouter_base_url: str | None = Field(default=None, validation_alias="OPENROUTER_BASE_URL")
+    ollama_base_url: str | None = Field(default=None, validation_alias="OLLAMA_BASE_URL")
+    ollama_model: str | None = Field(default=None, validation_alias="OLLAMA_MODEL")
+    # Optional comma-separated allowlist: when set, the configured model must be one of these.
+    ai_allowed_models: Annotated[list[str], NoDecode] = Field(default_factory=list)
     ai_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
     ai_max_tokens: int = Field(default=16_000, ge=256, le=64_000)
+    # Largest prompt (system + user text) sent to a provider; larger requests fail before any call.
+    ai_max_input_chars: int = Field(default=400_000, ge=10_000, le=4_000_000)
     # Reasoning effort sent to providers that support it.
     ai_effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     # AI requests allowed per user within the window (then HTTP 429).
@@ -128,7 +164,8 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["text", "json"] = "text"
 
-    # Must exceed max_source_bytes: JSON encoding can expand source text.
+    # Must exceed max_source_bytes: JSON encoding can expand source text. On Vercel the effective
+    # limit is at most VERCEL_MAX_REQUEST_BODY_BYTES (see request_body_limit).
     max_request_body_bytes: int = Field(default=6 * 1024 * 1024, gt=0)
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
 
@@ -162,6 +199,21 @@ class Settings(BaseSettings):
     scan_max_files: int = Field(default=10_000, ge=1, le=100_000)
 
     health_check_timeout_seconds: float = Field(default=3.0, gt=0, le=60)
+    # On SIGTERM, in-flight requests get this long to finish before they are cancelled and the
+    # shutdown cleanup (TypeScript worker, database pool) runs. Keep it below the host's grace
+    # period: 30 s on Vercel and in docker-compose.prod.yml (the container is killed after that).
+    shutdown_timeout_seconds: int = Field(default=20, ge=1, le=600)
+
+    # Vercel (read only when VERCEL=1, which Vercel sets in its build and runtime environments).
+    # The deployment's own URLs are allowed origins, so a preview or production deployment accepts
+    # requests from its own pages without listing each generated URL in CODEWALK_CORS_ORIGINS.
+    # All are bare host names (no scheme); the origin is always https://<host>.
+    vercel: str | None = Field(default=None, validation_alias="vercel")
+    vercel_url: str | None = Field(default=None, validation_alias="vercel_url")
+    vercel_branch_url: str | None = Field(default=None, validation_alias="vercel_branch_url")
+    vercel_project_production_url: str | None = Field(
+        default=None, validation_alias="vercel_project_production_url"
+    )
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -221,11 +273,68 @@ class Settings(BaseSettings):
             raise ValueError("CODEWALK_WORKSPACE_ROOT must be an existing directory")
         return value.resolve()
 
+    @field_validator(
+        "vercel", "vercel_url", "vercel_branch_url", "vercel_project_production_url", mode="before"
+    )
+    @classmethod
+    def _blank_platform_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("vercel_url", "vercel_branch_url", "vercel_project_production_url")
+    @classmethod
+    def _validate_host_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        host = value.strip().lower()
+        if not _HOST_NAME.match(host):
+            raise ValueError("VERCEL_*_URL values must be host names such as app.vercel.app")
+        return host
+
     @field_validator("node_binary", mode="before")
     @classmethod
     def _blank_node_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
+        return value
+
+    @field_validator(
+        "openrouter_model", "ollama_model", "openrouter_base_url", "ollama_base_url", mode="before"
+    )
+    @classmethod
+    def _blank_provider_setting_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("ai_allowed_models", mode="before")
+    @classmethod
+    def _parse_allowed_models(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [model.strip() for model in value.split(",") if model.strip()]
+        return value
+
+    @field_validator("ai_model", "openrouter_model", "ollama_model", "ai_allowed_models")
+    @classmethod
+    def _validate_model_names(cls, value: str | list[str] | None) -> str | list[str] | None:
+        for name in [value] if isinstance(value, str) else value or []:
+            if not _MODEL_NAME.match(name):
+                raise ValueError("AI model names may contain only letters, digits and . _ : / @ + -")
+        return value
+
+    @field_validator("openrouter_base_url")
+    @classmethod
+    def _secure_openrouter_url(cls, value: str | None) -> str | None:
+        if value is not None and not _credential_free_url(value, schemes=("https",)):
+            raise ValueError("OPENROUTER_BASE_URL must be an https:// URL without credentials")
+        return value
+
+    @field_validator("ollama_base_url")
+    @classmethod
+    def _valid_ollama_url(cls, value: str | None) -> str | None:
+        if value is not None and not _credential_free_url(value, schemes=("http", "https")):
+            raise ValueError("OLLAMA_BASE_URL must be an http(s):// URL without credentials")
         return value
 
     @field_validator("ai_base_url")
@@ -240,7 +349,14 @@ class Settings(BaseSettings):
         return value
 
     @field_validator(
-        "database_url", "ai_api_key", "anthropic_api_key", "openai_api_key", "voyage_api_key", mode="before"
+        "database_url",
+        "ai_api_key",
+        "anthropic_api_key",
+        "openai_api_key",
+        "gemini_api_key",
+        "openrouter_api_key",
+        "voyage_api_key",
+        mode="before",
     )
     @classmethod
     def _blank_secret_to_none(cls, value: object) -> object:
@@ -250,8 +366,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_limits(self) -> Settings:
-        if self.max_request_body_bytes <= self.max_source_bytes:
-            raise ValueError("CODEWALK_MAX_REQUEST_BODY_BYTES must be larger than CODEWALK_MAX_SOURCE_BYTES")
+        if self.request_body_limit <= self.max_source_bytes:
+            message = "CODEWALK_MAX_REQUEST_BODY_BYTES must be larger than CODEWALK_MAX_SOURCE_BYTES"
+            if self.on_vercel:
+                message += f" (on Vercel it is at most {VERCEL_MAX_REQUEST_BODY_BYTES} bytes)"
+            raise ValueError(message)
         return self
 
     @model_validator(mode="after")
@@ -274,20 +393,72 @@ class Settings(BaseSettings):
                 )
             if self.session_cookie_secure is False:
                 raise ValueError("CODEWALK_SESSION_COOKIE_SECURE cannot be false in production")
+            # Prompts carry project source code: in production they never cross a network in plain
+            # HTTP. A local Ollama on the same host (loopback) is the one exception.
+            ollama = urlsplit(self.ollama_base_url) if self.ollama_base_url else None
+            if ollama and ollama.scheme != "https" and ollama.hostname not in _LOOPBACK_HOSTS:
+                raise ValueError(
+                    "OLLAMA_BASE_URL must use https:// in production (http:// only for localhost)"
+                )
         return self
+
+    @model_validator(mode="after")
+    def _validate_ai_model(self) -> Settings:
+        if self.ai_enabled and self.ai_allowed_models:
+            model = self.ai_selected_model
+            if model is not None and model not in self.ai_allowed_models:
+                raise ValueError("The configured AI model is not in CODEWALK_AI_ALLOWED_MODELS")
+        return self
+
+    @property
+    def ai_provider_name(self) -> str:
+        return (self.ai_provider or "anthropic").strip().lower()
+
+    @property
+    def ai_selected_model(self) -> str | None:
+        """The model for the selected provider: OPENROUTER_MODEL/OLLAMA_MODEL win over CODEWALK_AI_MODEL."""
+        provider_model = {"openrouter": self.openrouter_model, "ollama": self.ollama_model}.get(
+            self.ai_provider_name
+        )
+        return provider_model or self.ai_model
 
     @property
     def is_production(self) -> bool:
         return self.env is Environment.PRODUCTION
 
     @property
+    def on_vercel(self) -> bool:
+        return self.vercel == "1"
+
+    @property
+    def request_body_limit(self) -> int:
+        """CODEWALK_MAX_REQUEST_BODY_BYTES, capped on Vercel at the platform's request body limit."""
+        if self.on_vercel:
+            return min(self.max_request_body_bytes, VERCEL_MAX_REQUEST_BODY_BYTES)
+        return self.max_request_body_bytes
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        """CODEWALK_CORS_ORIGINS plus, on Vercel, the deployment's own https:// URLs."""
+        origins = list(self.cors_origins)
+        if self.on_vercel:
+            for host in (self.vercel_url, self.vercel_branch_url, self.vercel_project_production_url):
+                if host and f"https://{host}" not in origins:
+                    origins.append(f"https://{host}")
+        return origins
+
+    @property
     def ai_credential(self) -> SecretStr | None:
         """CODEWALK_AI_API_KEY, else the selected provider's own variable (never another provider's key)."""
         if self.ai_api_key:
             return self.ai_api_key
-        if (self.ai_provider or "anthropic").lower() == "openai":
-            return self.openai_api_key
-        return self.anthropic_api_key
+        own = {
+            "anthropic": self.anthropic_api_key,
+            "openai": self.openai_api_key,
+            "gemini": self.gemini_api_key,
+            "openrouter": self.openrouter_api_key,
+        }
+        return own.get(self.ai_provider_name)  # Ollama needs none (CODEWALK_AI_API_KEY if behind a proxy)
 
     @property
     def cookie_secure(self) -> bool:

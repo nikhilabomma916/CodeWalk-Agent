@@ -25,7 +25,7 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import AI_PROVIDERS, Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.logging import request_id_var
 from app.core.metrics import timed
@@ -55,6 +55,7 @@ from app.schemas.ai import (
 from app.services.activity import ActivityRecorder
 from app.services.ai import edits as edit_rules
 from app.services.ai.base import (
+    AIContextTooLargeError,
     AIDisabledError,
     AIMalformedResponseError,
     AINotConfiguredError,
@@ -115,7 +116,9 @@ class AIService:
             try:
                 self.provider = create_provider(settings)
             except UnknownProviderError as exc:
-                self.provider_problem = f"Unknown AI provider {exc.args[0]!r} (supported: anthropic, openai)."
+                self.provider_problem = (
+                    f"Unknown AI provider {exc.args[0]!r} (supported: {', '.join(AI_PROVIDERS)})."
+                )
 
     def status(self) -> AIStatusResponse:
         enabled = self.settings.ai_enabled
@@ -161,6 +164,11 @@ class AIService:
         *,
         timeout_seconds: float | None = None,
     ) -> tuple[ModelT, StructuredResult]:
+        # Checked before any provider call: an oversized prompt would only cost money and fail.
+        if len(system) + len(user) > self.settings.ai_max_input_chars:
+            raise AIContextTooLargeError(
+                f"The request is larger than the {self.settings.ai_max_input_chars} character AI input limit."
+            )
         with timed("ai_provider_call"):
             result = provider.generate_structured(
                 StructuredRequest(

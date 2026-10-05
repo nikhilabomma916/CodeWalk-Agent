@@ -12,7 +12,13 @@ import {
   type Route,
 } from "@/testing/fake-api";
 
-import { selectFolder, uploadFolder, UPLOAD_BATCH_FILES } from "./folder-upload";
+import {
+  selectFolder,
+  uploadFolder,
+  UPLOAD_BATCH_BYTES,
+  UPLOAD_BATCH_FILES,
+  UPLOAD_REQUEST_MAX_BYTES,
+} from "./folder-upload";
 import { MAX_EDITABLE_FILE_BYTES } from "./sources/types";
 import { UploadFolderDialog } from "./upload-folder-dialog";
 
@@ -126,6 +132,77 @@ describe("uploadFolder", () => {
       }),
     ).rejects.toBeDefined();
     expect(requestsOf(fetchMock)).toHaveLength(1);
+  });
+});
+
+describe("uploadFolder request size", () => {
+  /** Sizes of the request bodies exactly as they were sent. */
+  const bodySizes = (fetchMock: ReturnType<typeof fakeBackend>) =>
+    fetchMock.mock.calls.map(([, init]) => new TextEncoder().encode(String(init?.body)).length);
+
+  it("sizes batches by the encoded JSON, so escape-heavy files never exceed the limit", async () => {
+    // 1 MB of quotes and backslashes doubles when JSON-encoded; raw-size batching would send ~6 MB.
+    const heavy = '"\\'.repeat(500_000) + "\n";
+    const files = Array.from({ length: 6 }, (_, i) => folderFile(`src/q${i}.py`, heavy));
+    const fetchMock = fakeBackend([importRoute()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await uploadFolder("p1", selectFolder(files));
+
+    expect(outcome.uploaded).toBe(6);
+    const sizes = bodySizes(fetchMock);
+    expect(sizes.length).toBeGreaterThan(1);
+    for (const size of sizes) expect(size).toBeLessThanOrEqual(UPLOAD_BATCH_BYTES);
+    const sent = requestsOf(fetchMock).flatMap((r) => (r.body as ImportBody).files);
+    expect(sent.map((f) => f.path)).toEqual(files.map((_, i) => `src/q${i}.py`));
+    expect(sent.every((f) => f.content === heavy)).toBe(true);
+  });
+
+  it("sends a large file alone when it fits in one request", async () => {
+    // 2 MB of quotes (the largest file allowed): just over the 4 MB batch target once encoded,
+    // still below 4.5 MB.
+    const big = '"'.repeat(MAX_EDITABLE_FILE_BYTES);
+    const fetchMock = fakeBackend([importRoute()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await uploadFolder(
+      "p1",
+      selectFolder([
+        folderFile("a.py", "x = 1\n"),
+        folderFile("big.txt", big),
+        folderFile("z.py", "y = 2\n"),
+      ]),
+    );
+
+    expect(outcome.uploaded).toBe(3);
+    const batches = requestsOf(fetchMock).map((r) =>
+      (r.body as ImportBody).files.map((f) => f.path),
+    );
+    expect(batches).toEqual([["a.py"], ["big.txt"], ["z.py"]]);
+    for (const size of bodySizes(fetchMock)) {
+      expect(size).toBeLessThanOrEqual(UPLOAD_REQUEST_MAX_BYTES);
+    }
+  });
+
+  it("skips a file that cannot fit in any request and uploads the rest", async () => {
+    // Control characters are sent as 6-byte escapes: 2 MB of them is about 12 MB of JSON.
+    const control = "\u0001".repeat(MAX_EDITABLE_FILE_BYTES - 1000);
+    const fetchMock = fakeBackend([importRoute()]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const outcome = await uploadFolder(
+      "p1",
+      selectFolder([folderFile("ok.py", "x = 1\n"), folderFile("weird.txt", control)]),
+    );
+
+    expect(outcome.uploaded).toBe(1);
+    expect(outcome.skipped).toEqual([
+      { path: "weird.txt", reason: "too large to upload once encoded (over 4.5 MB)" },
+    ]);
+    const sent = requestsOf(fetchMock).flatMap((r) =>
+      (r.body as ImportBody).files.map((f) => f.path),
+    );
+    expect(sent).toEqual(["ok.py"]);
   });
 });
 
