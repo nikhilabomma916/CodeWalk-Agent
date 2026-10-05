@@ -87,3 +87,9 @@ class ModelFix(_Strict):
 
 def output_schema(model: type[BaseModel]) -> dict[str, Any]:
     return model.model_json_schema()
+
+
+class ModelCompletion(_Strict):
+    """Inline completion: the text to insert at the cursor ("" when nothing fits)."""
+
+    completion: str

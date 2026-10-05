@@ -80,6 +80,12 @@ const AI_FAILED_REASONS: Record<string, string> = {
   ai_refused: "the provider declined the request",
 };
 
+/** The short reason for an AI error code ("provider quota exceeded"), if it is a known one. */
+export function aiErrorReason(code: string | null | undefined): string | undefined {
+  if (!code) return undefined;
+  return AI_UNAVAILABLE_REASONS[code] ?? AI_FAILED_REASONS[code];
+}
+
 /**
  * An AI failure with its reason ("AI unavailable / Reason: provider quota exceeded") and the
  * backend's message. Unknown codes show only the message.

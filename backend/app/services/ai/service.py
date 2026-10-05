@@ -27,7 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import AI_PROVIDERS, Settings
 from app.core.exceptions import AppError, NotFoundError
-from app.core.logging import request_id_var
+from app.core.logging import redact, request_id_var
 from app.core.metrics import METRICS, timed
 from app.core.rate_limit import AttemptLimiter, RateLimiter
 from app.db.models import ActivityType, Analysis, AnalysisStatus, AnalysisType, Project, ProjectFile, User
@@ -37,6 +37,8 @@ from app.schemas.ai import (
     AIAnalysisRequest,
     AIAnalysisResponse,
     AIAnalysisType,
+    AICompletionRequest,
+    AICompletionResponse,
     AIExplainRequest,
     AIExplanationResponse,
     AIFinding,
@@ -64,8 +66,9 @@ from app.services.ai.base import (
     StructuredRequest,
     StructuredResult,
 )
-from app.services.ai.outputs import ModelAnalysis, ModelExplanation, ModelFix, output_schema
+from app.services.ai.outputs import ModelAnalysis, ModelCompletion, ModelExplanation, ModelFix, output_schema
 from app.services.ai.prompts import code_analysis, explanation, fix
+from app.services.ai.prompts import completion as completion_prompt
 from app.services.ai.prompts.common import (
     ContextSnippet,
     render_context,
@@ -91,6 +94,39 @@ WINDOW_LINES = 150
 AI_HISTORY_PER_FILE = 20
 
 
+COMPLETION_MAX_REQUESTS = 240  # per user and window (debounced typing makes far fewer)
+COMPLETION_WINDOW_SECONDS = 600
+COMPLETION_PREFIX_CHARS = 6000
+COMPLETION_SUFFIX_CHARS = 2000
+COMPLETION_TIMEOUT_SECONDS = 15.0
+COMPLETION_MAX_TOKENS = 600
+COMPLETION_MAX_LINES = 40
+COMPLETION_MAX_CHARS = 4000
+
+
+def clean_completion(text: str, prefix: str, suffix: str) -> str:
+    """Makes a model completion safe to show as ghost text: no code fences, no repeated current
+    line, no duplicate of the text after the cursor, and bounded in size."""
+    text = text.replace("\r\n", "\n")
+    fenced = text.strip()
+    if fenced.startswith("```"):
+        lines = fenced.splitlines()[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    current_line = prefix.rsplit("\n", 1)[-1].lstrip()
+    if current_line and text.startswith(current_line):
+        text = text[len(current_line) :]  # the model repeated the start of the line
+    # Drop the part that the rest of the cursor's line already has (e.g. a closing bracket).
+    head = suffix.lstrip(" \t").split("\n", 1)[0]
+    for size in range(min(len(text), len(head)), 0, -1):
+        if text.endswith(head[:size]) and (size >= 3 or size == len(head)):
+            text = text[:-size]
+            break
+    lines = text.split("\n")[:COMPLETION_MAX_LINES]
+    return "\n".join(lines)[:COMPLETION_MAX_CHARS].rstrip()
+
+
 class AIRequestLimitError(AppError):
     status_code = 429
     code = "too_many_ai_requests"
@@ -112,6 +148,11 @@ class AIService:
         self.settings = settings
         # Replaced by a shared (PostgreSQL) limiter in create_app when a database is configured.
         self.limiter: RateLimiter = AttemptLimiter(settings.ai_max_requests, settings.ai_window_seconds)
+        # Inline completions have their own, larger budget so ghost text never uses up the one for
+        # explanations, fixes and the agent (also replaced by a shared limiter in create_app).
+        self.completion_limiter: RateLimiter = AttemptLimiter(
+            COMPLETION_MAX_REQUESTS, COMPLETION_WINDOW_SECONDS, name="ai-complete"
+        )
         self.provider: AIProvider | None = provider
         self.provider_problem: str | None = None
         if provider is None and settings.ai_enabled:
@@ -144,7 +185,7 @@ class AIService:
             analysis_types=list(AIAnalysisType),
         )
 
-    def require_available(self, user: User) -> AIProvider:
+    def _configured_provider(self) -> AIProvider:
         if not self.settings.ai_enabled:
             raise AIDisabledError()
         if self.provider is None:
@@ -152,10 +193,14 @@ class AIService:
         state = self.provider.status()
         if not state.configured:
             raise AINotConfiguredError(state.detail or "The AI provider is not configured.")
+        return self.provider
+
+    def require_available(self, user: User) -> AIProvider:
+        provider = self._configured_provider()
         key = f"ai:{user.id}"
         if (retry_after := self.limiter.acquire(key)) is not None:  # every request counts toward the limit
             raise AIRequestLimitError(retry_after)
-        return self.provider
+        return provider
 
     def run(
         self,
@@ -165,6 +210,8 @@ class AIService:
         output: type[ModelT],
         *,
         timeout_seconds: float | None = None,
+        max_tokens: int | None = None,
+        effort: str | None = None,
     ) -> tuple[ModelT, StructuredResult]:
         # Checked before any provider call: an oversized prompt would only cost money and fail.
         if len(system) + len(user) > self.settings.ai_max_input_chars:
@@ -181,12 +228,14 @@ class AIService:
                         system=system,
                         user=user,
                         schema=output_schema(output),
-                        max_tokens=self.settings.ai_max_tokens,
+                        max_tokens=min(
+                            max_tokens or self.settings.ai_max_tokens, self.settings.ai_max_tokens
+                        ),
                         timeout_seconds=min(
                             timeout_seconds or self.settings.ai_timeout_seconds,
                             self.settings.ai_timeout_seconds,
                         ),
-                        effort=self.settings.ai_effort,
+                        effort=effort or self.settings.ai_effort,
                     )
                 )
             outcome, usage = "ok", result.usage
@@ -211,6 +260,35 @@ class AIService:
         except ValidationError:
             logger.warning("AI answer failed schema validation (%s)", output.__name__)
             raise AIMalformedResponseError() from None
+
+    def complete(self, user: User, request: AICompletionRequest) -> AICompletionResponse:
+        """Inline completion: the text to insert at the cursor. Nothing is stored or logged."""
+        provider = self._configured_provider()
+        if (retry_after := self.completion_limiter.acquire(f"ai-complete:{user.id}")) is not None:
+            raise AIRequestLimitError(retry_after)
+        # Only the text near the cursor is sent, with credential-shaped values scrubbed.
+        prefix = redact(request.prefix[-COMPLETION_PREFIX_CHARS:])
+        suffix = redact(request.suffix[:COMPLETION_SUFFIX_CHARS])
+        answer, _ = self.run(
+            provider,
+            completion_prompt.SYSTEM,
+            completion_prompt.user_message(
+                file_path=request.file_path,
+                language=request.language,
+                prefix=prefix,
+                suffix=suffix,
+                comment=request.mode == "comment",
+            ),
+            ModelCompletion,
+            timeout_seconds=COMPLETION_TIMEOUT_SECONDS,
+            max_tokens=COMPLETION_MAX_TOKENS,
+            effort="low",
+        )
+        return AICompletionResponse(
+            completion=clean_completion(answer.completion, request.prefix, request.suffix),
+            provider=provider.name,
+            model=provider.model,
+        )
 
 
 @dataclass

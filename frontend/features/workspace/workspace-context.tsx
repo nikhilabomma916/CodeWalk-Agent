@@ -81,6 +81,10 @@ function loadStoredSettings(): EditorSettings {
         typeof stored.minimap === "boolean" ? stored.minimap : DEFAULT_EDITOR_SETTINGS.minimap,
       autoSave:
         typeof stored.autoSave === "boolean" ? stored.autoSave : DEFAULT_EDITOR_SETTINGS.autoSave,
+      aiCompletions:
+        typeof stored.aiCompletions === "boolean"
+          ? stored.aiCompletions
+          : DEFAULT_EDITOR_SETTINGS.aiCompletions,
     };
   } catch {
     return DEFAULT_EDITOR_SETTINGS;

@@ -31,12 +31,15 @@ export const ANALYSIS_MARKER_OWNER = "codewalk-analysis";
 export const MONO_FONT_STACK =
   'ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
 
+import { registerInlineCompletions } from "./inline-completion-provider";
+
 let configured = false;
 
 /** One-time global Monaco configuration; safe to call on every mount. */
 export function configureMonaco(monaco: Monaco): void {
   if (configured) return;
   configured = true;
+  registerInlineCompletions(monaco);
 
   // Editor colours mirror the app tokens in globals.css (Monaco cannot read CSS variables).
   monaco.editor.defineTheme(MONACO_THEMES.dark, {
@@ -105,6 +108,17 @@ export function configureMonaco(monaco: Monaco): void {
 /** Editor models are namespaced by project instance so same-named files never collide. */
 export function modelUri(projectId: string, path: string): string {
   return `file:///${projectId}/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** The project path of a model created with modelUri, or null for another project's model. */
+export function pathFromModelUri(projectId: string, uri: string): string | null {
+  const prefix = `file:///${projectId}/`;
+  if (!uri.startsWith(prefix)) return null;
+  try {
+    return uri.slice(prefix.length).split("/").map(decodeURIComponent).join("/");
+  } catch {
+    return null;
+  }
 }
 
 export function toMarkers(

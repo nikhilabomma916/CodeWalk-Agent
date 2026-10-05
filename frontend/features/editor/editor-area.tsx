@@ -6,6 +6,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
 import { AgentReview } from "@/features/agent/agent-review";
+import { useAIAssist } from "@/features/ai/ai-assist-context";
 import { FixReview } from "@/features/ai/fix-review";
 import { useLiveAnalysis } from "@/features/analysis/use-live-analysis";
 import { isDirty } from "@/features/workspace/state";
@@ -29,6 +30,8 @@ export function EditorArea() {
     state;
   const setCursor = useSetCursor();
   const monacoStatus = useMonacoStatus();
+  const { status: aiStatus } = useAIAssist();
+  const aiAvailable = aiStatus.state === "ready" && aiStatus.data.available;
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
 
   const dirtyPaths = useMemo(
@@ -133,6 +136,7 @@ export function EditorArea() {
         language={editorBuffer.languageOverride ?? detectLanguage(editorPath)}
         settings={editorSettings}
         readOnly={project.readOnly}
+        aiCompletions={editorSettings.aiCompletions && aiAvailable}
         openPaths={openPaths}
         diagnostics={diagnosticsByPath}
         reveal={reveal}

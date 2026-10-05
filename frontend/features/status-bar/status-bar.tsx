@@ -1,6 +1,7 @@
 "use client";
 
 import { AlertTriangle, CircleX } from "lucide-react";
+import { useSyncExternalStore } from "react";
 
 import type { BackendConnection } from "@/features/backend-status/use-backend-health";
 import { useCursor } from "@/features/editor/cursor-context";
@@ -8,6 +9,11 @@ import { useAllDiagnostics } from "@/features/problems/problems-panel";
 import { isDirty, type FileAnalysis } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage, languageLabel } from "@/lib/languages";
+import { aiErrorReason } from "@/features/ai/ai-common";
+import { completionStatusStore } from "@/features/editor/inline-completion-provider";
+import type { CompletionStatus } from "@/features/editor/inline-completion";
+
+const IDLE_COMPLETIONS: CompletionStatus = { state: "idle" };
 
 const CONNECTION_VIEW: Record<BackendConnection["state"], { label: string; dot: string }> = {
   checking: { label: "Backend: checking…", dot: "bg-fg-subtle" },
@@ -104,6 +110,14 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
   const database = databaseStatus(connection);
   const analysis = analysisLabel(activePath ? state.analysis[activePath] : undefined);
 
+  const completions = useSyncExternalStore(
+    completionStatusStore.subscribe,
+    completionStatusStore.get,
+    () => IDLE_COMPLETIONS,
+  );
+  const completionsPaused =
+    completions.state === "paused" && editorSettings.aiCompletions ? completions : null;
+
   let fileState: string | null = null;
   if (buffer?.status === "ready") {
     if (buffer.saving) fileState = "Saving…";
@@ -172,6 +186,16 @@ export function StatusBar({ connection, onRecheck, onToggleProblems }: StatusBar
           <span className={item}>
             {languageLabel(buffer.languageOverride ?? detectLanguage(activePath))}
           </span>
+          {completionsPaused && (
+            <span
+              role="status"
+              title={`${completionsPaused.message} Automatic suggestions resume in a minute; Ctrl+Space asks now.`}
+              className={`${item} text-warning`}
+            >
+              AI completions paused:{" "}
+              {aiErrorReason(completionsPaused.code) ?? completionsPaused.code}
+            </span>
+          )}
           {fileState && (
             <span
               role="status"

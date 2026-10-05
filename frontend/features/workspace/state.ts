@@ -69,6 +69,8 @@ export interface EditorSettings {
   minimap: boolean;
   /** Save a changed file automatically shortly after typing stops. */
   autoSave: boolean;
+  /** AI ghost-text completions while typing (only when AI is available on the server). */
+  aiCompletions: boolean;
 }
 
 export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
@@ -77,6 +79,7 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettings = {
   wordWrap: false,
   minimap: true,
   autoSave: true,
+  aiCompletions: true,
 };
 
 export interface RevealRequest {

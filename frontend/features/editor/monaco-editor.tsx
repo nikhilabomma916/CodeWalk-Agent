@@ -18,7 +18,9 @@ import {
   monacoTheme,
   toMarkers,
   type Monaco,
+  pathFromModelUri,
 } from "./monaco-setup";
+import { inlineCompletionConfig } from "./inline-completion-provider";
 
 export interface MonacoEditorProps {
   projectId: string;
@@ -28,6 +30,8 @@ export interface MonacoEditorProps {
   language: string;
   settings: EditorSettings;
   readOnly: boolean;
+  /** AI ghost text while typing (the setting is on and AI is available). */
+  aiCompletions?: boolean;
   openPaths: readonly string[];
   /** Diagnostics per file path; rendered as markers on the matching models. */
   diagnostics: Readonly<Record<string, readonly Diagnostic[]>>;
@@ -82,6 +86,12 @@ export default function MonacoEditor(props: MonacoEditorProps) {
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       latest.current.onSave(latest.current.path);
     });
+    // Ctrl+Space: ask for an AI suggestion now (ghost text) as well as the usual suggestion list.
+    instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => {
+      if (latest.current.aiCompletions)
+        instance.trigger("keyboard", "editor.action.inlineSuggest.trigger", {});
+      instance.trigger("keyboard", "editor.action.triggerSuggest", {});
+    });
 
     const reportCursor = () => {
       const position = instance.getPosition();
@@ -115,6 +125,16 @@ export default function MonacoEditor(props: MonacoEditorProps) {
       applyReveal(instance, pending);
     else if (!document.activeElement?.closest('[role="tree"]')) instance.focus();
   };
+
+  // The ghost-text provider is global: point it at this project and switch it on or off.
+  const aiCompletions = Boolean(props.aiCompletions) && !readOnly;
+  useEffect(() => {
+    inlineCompletionConfig.enabled = aiCompletions;
+    inlineCompletionConfig.pathFor = (uri) => pathFromModelUri(projectId, uri);
+    return () => {
+      inlineCompletionConfig.enabled = false;
+    };
+  }, [aiCompletions, projectId]);
 
   // Dispose models whose tab was closed (or that belong to a previous project).
   useEffect(() => {
@@ -212,6 +232,7 @@ export default function MonacoEditor(props: MonacoEditorProps) {
         showFoldingControls: "mouseover",
         matchBrackets: "always",
         stickyScroll: { enabled: true },
+        inlineSuggest: { enabled: aiCompletions, showToolbar: "onHover" },
         fixedOverflowWidgets: true,
         padding: { top: 8 },
       }}

@@ -43,7 +43,7 @@ checks that `/metrics` is not reachable through the proxy.
 | `codewalk_ai_tokens_total` (counter) | `provider`, `model`, `direction` (`input`, `output`) |
 | `codewalk_ai_cost_microusd_total` (counter) | `provider`, `model` (OpenRouter reports cost) |
 | `codewalk_error_responses_total` (counter) | `status`, `code` (every error response: `database_unavailable`, `rate_limited`, `github_*`, ...) |
-| `codewalk_rate_limited_total` (counter) | `limit` (`login`, `login-account`, `register`, `ai`, `agent`, `rag-query`, `rag-index`, `github-import`); one per refused request: `retry_after` only inspects and counts nothing |
+| `codewalk_rate_limited_total` (counter) | `limit` (`login`, `login-account`, `register`, `ai`, `ai-complete`, `agent`, `rag-query`, `rag-index`, `github-import`); one per refused request: `retry_after` only inspects and counts nothing |
 
 | Operation | Outcomes |
 | --- | --- |
@@ -103,7 +103,8 @@ error rate (`status="5xx"`), provider failure rate (`codewalk_ai_request_duratio
 
 **Rate limits are shared through PostgreSQL** (Module 21) when a database is configured: every API
 process and serverless instance counts against the same window (login 10/15 min per address and
-email plus 50/15 min per account, registration 20/h, AI 30/10 min, agent 20/10 min, semantic
+email plus 50/15 min per account, registration 20/h, AI 30/10 min, inline AI completions 240/10 min
+(separate, so ghost text never uses up the AI budget), agent 20/10 min, semantic
 queries 120/10 min, index runs 10/10 min, GitHub imports 10/h). Without a database, or while it is
 unreachable, each process falls back to its own counters.
 

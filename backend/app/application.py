@@ -24,7 +24,7 @@ from app.core.middleware import (
 )
 from app.core.rate_limit import RateLimiter, make_limiter
 from app.db.session import Database, DatabaseHealthCheck
-from app.services.ai.service import AIService
+from app.services.ai.service import COMPLETION_MAX_REQUESTS, COMPLETION_WINDOW_SECONDS, AIService
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
 from app.services.github.client import GitHubClient
@@ -132,6 +132,9 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
 
     app.state.ai_service = AIService(settings)
     app.state.ai_service.limiter = limiter("ai", settings.ai_max_requests, settings.ai_window_seconds)
+    app.state.ai_service.completion_limiter = limiter(
+        "ai-complete", COMPLETION_MAX_REQUESTS, COMPLETION_WINDOW_SECONDS
+    )
     app.state.search_index_cache = IndexCache()
     app.state.retrieval_service = RetrievalService(settings)
     app.state.retrieval_service.query_limiter = limiter(

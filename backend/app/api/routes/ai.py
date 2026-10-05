@@ -12,6 +12,8 @@ from app.api.deps import AIAssistantDep, AIServiceDep, CurrentUserDep
 from app.schemas.ai import (
     AIAnalysisRequest,
     AIAnalysisResponse,
+    AICompletionRequest,
+    AICompletionResponse,
     AIExplainRequest,
     AIExplanationResponse,
     AIFixRequest,
@@ -97,3 +99,21 @@ def ai_explain(request: AIExplainRequest, assistant: AIAssistantDep) -> AIExplan
 )
 def ai_fix_suggestion(request: AIFixRequest, assistant: AIAssistantDep) -> AIFixSuggestionResponse:
     return assistant.fix_suggestion(request)
+
+
+@router.post(
+    "/complete",
+    response_model=AICompletionResponse,
+    summary="Inline code completion (ghost text)",
+    description=(
+        "Returns the text to insert at the cursor from the code around it (credential-shaped values are "
+        "scrubbed before anything is sent to the provider). Nothing is stored or applied: the editor "
+        "shows it as a suggestion that the developer accepts or ignores. Has its own rate limit "
+        "(`too_many_ai_requests`), separate from the other AI requests; never retried automatically."
+    ),
+    responses=_ERRORS,
+)
+def ai_complete(
+    request: AICompletionRequest, service: AIServiceDep, user: CurrentUserDep
+) -> AICompletionResponse:
+    return service.complete(user, request)

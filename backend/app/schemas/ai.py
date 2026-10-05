@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -234,3 +234,27 @@ class AIStatusResponse(BaseModel):
     model: str | None
     detail: str | None = Field(description="Why AI is unavailable, when it is.")
     analysis_types: list[AIAnalysisType]
+
+
+MAX_COMPLETION_PREFIX_CHARS = 20_000
+MAX_COMPLETION_SUFFIX_CHARS = 8_000
+
+
+class AICompletionRequest(BaseModel):
+    """The text around the cursor for inline completion (ghost text). Nothing is stored."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: ProjectFilePath
+    language: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9+#._-]+$")
+    prefix: str = Field(max_length=MAX_COMPLETION_PREFIX_CHARS, description="Code before the cursor.")
+    suffix: str = Field(default="", max_length=MAX_COMPLETION_SUFFIX_CHARS, description="Code after it.")
+    mode: Literal["auto", "comment"] = Field(
+        default="auto", description='"comment": the line before the cursor is a comment asking for code.'
+    )
+
+
+class AICompletionResponse(BaseModel):
+    completion: str = Field(description="Text to insert at the cursor; empty when nothing fits.")
+    provider: str
+    model: str | None

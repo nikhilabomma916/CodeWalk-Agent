@@ -153,6 +153,40 @@ export async function getAIStatus(client: ApiClient = apiClient): Promise<AIStat
   return (await client.request("/ai/status", { schema: statusSchema })).data;
 }
 
+const completionSchema = z.object({
+  completion: z.string(),
+  provider: z.string(),
+  model: z.string().nullable(),
+});
+
+/** Inline completion: the text to insert at the cursor (empty when nothing fits). */
+export async function completeCode(
+  input: {
+    filePath: string;
+    language: string;
+    prefix: string;
+    suffix: string;
+    mode: "auto" | "comment";
+  },
+  signal?: AbortSignal,
+  client: ApiClient = apiClient,
+): Promise<string> {
+  const { data } = await client.request("/ai/complete", {
+    method: "POST",
+    body: {
+      file_path: input.filePath,
+      language: input.language,
+      prefix: input.prefix,
+      suffix: input.suffix,
+      mode: input.mode,
+    },
+    schema: completionSchema,
+    timeoutMs: 20_000,
+    signal,
+  });
+  return data.completion;
+}
+
 export async function analyzeWithAI(
   input: AIFileInput & { analysisType: AIAnalysisType },
   client: ApiClient = apiClient,

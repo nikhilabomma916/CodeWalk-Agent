@@ -92,6 +92,15 @@ export function EditorSettingsMenu({ settings, onChange }: EditorSettingsMenuPro
             />
           </label>
           <label className={rowClass}>
+            AI completions
+            <input
+              type="checkbox"
+              checked={settings.aiCompletions}
+              onChange={(event) => onChange({ aiCompletions: event.target.checked })}
+              className="accent-accent"
+            />
+          </label>
+          <label className={rowClass}>
             Auto save
             <input
               type="checkbox"
