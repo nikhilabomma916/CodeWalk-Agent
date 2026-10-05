@@ -98,6 +98,7 @@ def test_vercel_image_only_adds_the_documented_environment() -> None:
         "CODEWALK_PORT": "8000",
         "CODEWALK_NODE_BINARY": "/usr/local/bin/node",
         "CODEWALK_CORS_ORIGINS": '""',  # the VERCEL_* URLs only, unless the project sets a domain
+        "CODEWALK_LOG_FORMAT": "json",  # one JSON object per line for the platform's log viewer
         "FORWARDED_ALLOW_IPS": "*",
     }
     assert not re.search(r"^HEALTHCHECK", text, re.M)
