@@ -16,6 +16,7 @@ import { createProject } from "@/services/api/projects";
 import { AppHeader } from "./app-header";
 import { BottomPanel } from "./bottom-panel";
 import { NewProjectDialog, type NewProjectRequest } from "./new-project-dialog";
+import { RightSidebar } from "./right-sidebar";
 import { Sidebar, type SidebarView } from "./sidebar";
 import { serverAvailability, useServerProjects } from "./use-server-projects";
 import { Welcome } from "./welcome";
@@ -42,12 +43,14 @@ export function WorkspaceProviders({ children }: { children: ReactNode }) {
   );
 }
 
-/** The Coding area: explorer, tabs, Monaco, Problems/Project panel, status bar. */
+/** The Coding area: explorer | tabs + Monaco + Problems | AI sidebar, and the status bar. */
 export function CodingWorkspace() {
   const { state, actions, canOpenDirectory } = useWorkspace();
   const { connection, recheck } = useBackendHealth();
   const sidebarRef = usePanelRef();
   const problemsRef = usePanelRef();
+  const assistantRef = usePanelRef();
+  const [assistantOpen, setAssistantOpen] = useState(true);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [problemsOpen, setProblemsOpen] = useState(true);
@@ -102,11 +105,13 @@ export function CodingWorkspace() {
     folderInputRef.current?.setAttribute("webkitdirectory", "");
   }, []);
 
-  // Start with the explorer collapsed on narrow screens so the editor keeps its space.
+  // Start with the explorer and AI sidebar collapsed on narrow screens so the editor keeps its space.
   useEffect(() => {
-    if (hasProject && window.matchMedia(NARROW_SCREEN_QUERY).matches)
+    if (hasProject && window.matchMedia(NARROW_SCREEN_QUERY).matches) {
       sidebarRef.current?.collapse();
-  }, [hasProject, sidebarRef]);
+      assistantRef.current?.collapse();
+    }
+  }, [assistantRef, hasProject, sidebarRef]);
 
   const toggleSidebar = useCallback(() => {
     const panel = sidebarRef.current;
@@ -114,6 +119,13 @@ export function CodingWorkspace() {
     if (panel.isCollapsed()) panel.expand();
     else panel.collapse();
   }, [sidebarRef]);
+
+  const toggleAssistant = useCallback(() => {
+    const panel = assistantRef.current;
+    if (!panel) return;
+    if (panel.isCollapsed()) panel.expand();
+    else panel.collapse();
+  }, [assistantRef]);
 
   const toggleProblems = useCallback(() => {
     const panel = problemsRef.current;
@@ -131,8 +143,16 @@ export function CodingWorkspace() {
   const activePath = state.activePath;
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
       const key = event.key.toLowerCase();
+      if (event.altKey) {
+        // Ctrl+Alt+B toggles the AI sidebar (VS Code's secondary side bar).
+        if (key === "b" && !event.shiftKey) {
+          event.preventDefault();
+          toggleAssistant();
+        }
+        return;
+      }
       if (key === "s" && !event.shiftKey) {
         event.preventDefault(); // never show the browser's "Save page" dialog
         if (activePath) void actions.saveFile(activePath);
@@ -151,13 +171,15 @@ export function CodingWorkspace() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [actions, activePath, sidebarRef, toggleProblems, toggleSidebar]);
+  }, [actions, activePath, sidebarRef, toggleAssistant, toggleProblems, toggleSidebar]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <AppHeader
         sidebarOpen={hasProject && sidebarOpen}
         onToggleSidebar={toggleSidebar}
+        assistantOpen={hasProject && assistantOpen}
+        onToggleAssistant={toggleAssistant}
         onNewProject={() => setNewProjectOpen(true)}
         onOpenFolder={openFolder}
       />
@@ -203,6 +225,18 @@ export function CodingWorkspace() {
                   {problemsOpen && <BottomPanel onClose={toggleProblems} />}
                 </Panel>
               </Group>
+            </Panel>
+            <Separator />
+            <Panel
+              id="assistant"
+              panelRef={assistantRef}
+              collapsible
+              defaultSize="28%"
+              minSize={280}
+              maxSize="55%"
+              onResize={(size) => setAssistantOpen(size.inPixels > 0)}
+            >
+              {assistantOpen && <RightSidebar onClose={toggleAssistant} />}
             </Panel>
           </Group>
         ) : (

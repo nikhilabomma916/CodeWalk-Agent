@@ -206,6 +206,14 @@ export interface AgentRunInput {
   selection?: SelectionRange | null;
   diagnostics?: Diagnostic[];
   mode?: AgentMode;
+  /** Earlier turns of the same chat, oldest first (at most 8 are sent). */
+  history?: ConversationTurn[];
+}
+
+/** One earlier message of a chat: what the developer asked, or what the agent answered. */
+export interface ConversationTurn {
+  role: "developer" | "agent";
+  content: string;
 }
 
 export async function getAgentStatus(client: ApiClient = apiClient): Promise<AgentStatus> {
@@ -235,6 +243,7 @@ export async function runAgent(
           : undefined,
       diagnostics: (input.diagnostics ?? []).slice(0, 50).map(toBackendDiagnostic),
       mode: input.mode ?? "assist",
+      history: (input.history ?? []).slice(-8),
     },
     schema: runSchema,
     timeoutMs: AGENT_RUN_TIMEOUT_MS,

@@ -17,13 +17,18 @@ import { buildTree } from "@/lib/project-paths";
 import type { LanguageId } from "@/lib/languages";
 import { isApiError } from "@/services/api/errors";
 import { analyzeProject, getProjectIntelligence } from "@/services/api/intelligence";
-import { getProject, type ServerProject } from "@/services/api/projects";
+import {
+  createProject as createServerProject,
+  getProject,
+  type ServerProject,
+} from "@/services/api/projects";
 import type { Diagnostic } from "@/types/diagnostics";
 import type { ProjectFolderNode, ProjectPath } from "@/types/project";
 
 import { LocalDirectorySource, supportsDirectoryAccess } from "./sources/local-directory-source";
 import { LocalSnapshotSource } from "./sources/local-snapshot-source";
 import { MemoryProjectSource } from "./sources/memory-source";
+import { uploadTextFiles, type UploadOutcome, type UploadProgress } from "./folder-upload";
 import { ServerProjectSource } from "./sources/server-source";
 import { SourceError, type ProjectSource } from "./sources/types";
 import {
@@ -124,6 +129,15 @@ export interface WorkspaceActions {
    * one undoable edit and is marked saved; files that are not open load it when opened.
    */
   syncSavedContent(path: ProjectPath, content: string): void;
+  /**
+   * Saves a browser-only project (in memory or a local folder) as a CodeWalk project on the server,
+   * including unsaved editor content, then opens it from the server. Server features (agent,
+   * history, project search, insights) need this. Files the server refuses (credentials, binary,
+   * too large) are reported, never silently dropped.
+   */
+  saveToServer(options?: {
+    onProgress?(progress: UploadProgress): void;
+  }): Promise<UploadOutcome & { project: ServerProject }>;
   /** Opens a project stored by the backend. Resolves false if the user kept the current one. */
   openServerProject(project: ServerProject): Promise<boolean>;
   /** Reopens the server project used last (after a page reload); false if none/unavailable. */
@@ -336,6 +350,30 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         rememberServerProject(null);
         dispatch({ type: "project/closed" });
         return true;
+      },
+
+      async saveToServer(options = {}) {
+        const source = sourceRef.current;
+        if (!source) throw new SourceError("invalid", "Open a project first.");
+        if (source.serverProjectId)
+          throw new SourceError("invalid", "This project is already saved on the server.");
+        const files = stateRef.current.entries.filter((entry) => entry.type === "file");
+        const project = await createServerProject({ name: source.name });
+        const outcome = await uploadTextFiles(
+          project.id,
+          files.map(({ path }) => ({
+            path,
+            // The editor's content wins (it may have unsaved edits); otherwise read the source.
+            read: async () => {
+              const buffer = stateRef.current.buffers[path];
+              return buffer?.status === "ready" ? buffer.content : source.read(path);
+            },
+          })),
+          { onProgress: options.onProgress },
+        );
+        // Everything was uploaded with its current content, so nothing unsaved is lost here.
+        if (sourceRef.current === source) await loadSource(new ServerProjectSource(project));
+        return { ...outcome, project };
       },
 
       async openServerProject(project) {

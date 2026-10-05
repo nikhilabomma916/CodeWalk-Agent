@@ -1,6 +1,6 @@
 "use client";
 
-import { FolderOpen, FolderPlus, PanelLeft, ScanSearch, X } from "lucide-react";
+import { FolderOpen, FolderPlus, PanelLeft, PanelRight, ScanSearch, X } from "lucide-react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { EditorSettingsMenu } from "@/features/settings/editor-settings-menu";
@@ -28,6 +28,8 @@ const SOURCE_BADGE = {
 interface AppHeaderProps {
   sidebarOpen: boolean;
   onToggleSidebar(): void;
+  assistantOpen: boolean;
+  onToggleAssistant(): void;
   onNewProject(): void;
   onOpenFolder(): void;
 }
@@ -35,6 +37,8 @@ interface AppHeaderProps {
 export function AppHeader({
   sidebarOpen,
   onToggleSidebar,
+  assistantOpen,
+  onToggleAssistant,
   onNewProject,
   onOpenFolder,
 }: AppHeaderProps) {
@@ -120,6 +124,15 @@ export function AppHeader({
         )}
         <span aria-hidden className="mx-1 h-4 w-px bg-border" />
         <EditorSettingsMenu settings={editorSettings} onChange={actions.updateSettings} />
+        <IconButton
+          label={assistantOpen ? "Hide AI sidebar" : "Show AI sidebar"}
+          shortcut="Ctrl+Alt+B"
+          active={assistantOpen}
+          onClick={onToggleAssistant}
+          disabled={!project}
+        >
+          <PanelRight aria-hidden className="size-4" />
+        </IconButton>
       </div>
     </header>
   );

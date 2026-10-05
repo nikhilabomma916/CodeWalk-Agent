@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -47,6 +47,21 @@ class SelectionRange(BaseModel):
         return self
 
 
+MAX_HISTORY_TURNS = 8
+MAX_HISTORY_TURN_CHARS = 4000
+
+
+class ConversationTurn(BaseModel):
+    """An earlier message of the same chat, sent back by the client so follow-ups have context.
+
+    It is treated as untrusted data in the prompt (like project files), never as instructions."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["developer", "agent"]
+    content: str = Field(min_length=1, max_length=MAX_HISTORY_TURN_CHARS)
+
+
 class AgentRunRequest(BaseModel):
     """What the developer asked, and where they are. Only ids and the open file travel here; everything
     else is retrieved server-side from the developer's own project."""
@@ -64,6 +79,11 @@ class AgentRunRequest(BaseModel):
         default_factory=list, max_length=MAX_DIAGNOSTICS, description="Problems currently shown for the file."
     )
     mode: AgentMode = Field(default=AgentMode.ASSIST, description="The workflow to run.")
+    history: list[ConversationTurn] = Field(
+        default_factory=list,
+        max_length=MAX_HISTORY_TURNS,
+        description="Earlier turns of this chat, oldest first (the client keeps the conversation).",
+    )
 
     @model_validator(mode="after")
     def _file_context(self) -> AgentRunRequest:

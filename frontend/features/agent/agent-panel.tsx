@@ -6,15 +6,23 @@ import {
   CheckCircle2,
   FileDiff,
   Loader2,
+  MessageSquarePlus,
   Search,
+  SendHorizontal,
   Sparkles,
+  Square,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 
+import { IconButton } from "@/components/ui/icon-button";
 import { AiErrorNotice } from "@/features/ai/ai-common";
+import { useCursor } from "@/features/editor/cursor-context";
 import { useWorkspace } from "@/features/workspace/workspace-context";
+import { plural } from "@/lib/format";
+import { detectLanguage, languageLabel } from "@/lib/languages";
 import {
   AGENT_MODES,
   SEVERITIES,
@@ -24,6 +32,7 @@ import {
   type AgentRun,
   type ReviewFinding,
 } from "@/services/api/agent";
+import { isApiError } from "@/services/api/errors";
 
 import { useAgent } from "./agent-context";
 
@@ -35,23 +44,6 @@ const MODE_LABEL: Record<AgentMode, string> = {
   refactor: "Refactor (multi-file)",
   impact: "Impact analysis",
   architecture: "Explain architecture",
-};
-
-const SUGGESTIONS: Record<AgentMode, string[]> = {
-  assist: [
-    "Explain the problems in this file",
-    "Where is this file used in the project?",
-    "Fix the problems in this file",
-  ],
-  review: ["Review this file", "Review the selected code for security issues"],
-  tests: ["Generate tests for this file", "Generate tests for the selected function"],
-  docs: ["Document the functions in this file", "Write a short guide for this module"],
-  refactor: [
-    "Rename the selected function and update its callers",
-    "Simplify duplicated logic here",
-  ],
-  impact: ["What could break if I change this file?", "What uses the selected function?"],
-  architecture: ["How is authentication implemented?", "Explain the backend architecture"],
 };
 
 /** "line 4" or "lines 4-6"; a selection that ends at column 1 does not include that last line. */
@@ -450,9 +442,240 @@ function RunView({ run }: { run: AgentRun }) {
   );
 }
 
-/** The project-aware agent, in the Coding workspace's bottom panel. */
-export function AgentPanel() {
-  const { status, run, ask, cancel, selection } = useAgent();
+/** Suggested actions: each runs a real agent workflow on the open file, the selection, or the project. */
+type QuickAction = {
+  label: string;
+  mode: AgentMode;
+  needs: "file" | "selection" | "project";
+  /** The request; `target` is "the selected code" or "this file". */
+  message(target: string): string;
+};
+
+const QUICK_ACTIONS: QuickAction[] = [
+  { label: "Explain", mode: "assist", needs: "file", message: (t) => `Explain what ${t} does.` },
+  {
+    label: "Fix",
+    mode: "assist",
+    needs: "file",
+    message: (t) => `Fix the problems in ${t}. Propose the change for review.`,
+  },
+  {
+    label: "Debug",
+    mode: "assist",
+    needs: "file",
+    message: (t) => `Debug ${t}: find the most likely cause of its problems and explain it.`,
+  },
+  {
+    label: "Refactor",
+    mode: "refactor",
+    needs: "file",
+    message: (t) => `Refactor ${t} for readability without changing its behavior.`,
+  },
+  {
+    label: "Optimize",
+    mode: "assist",
+    needs: "file",
+    message: (t) => `Optimize ${t} for performance while keeping its behavior the same.`,
+  },
+  {
+    label: "Generate tests",
+    mode: "tests",
+    needs: "file",
+    message: (t) => `Generate tests for ${t}.`,
+  },
+  {
+    label: "Add comments",
+    mode: "docs",
+    needs: "file",
+    message: (t) => `Add clear comments and docstrings to ${t}.`,
+  },
+  {
+    label: "Explain selection",
+    mode: "assist",
+    needs: "selection",
+    message: () => "Explain the selected code step by step.",
+  },
+  {
+    label: "Find usages",
+    mode: "impact",
+    needs: "file",
+    message: (t) => `Find where ${t} (its functions and classes) is used in the project.`,
+  },
+  {
+    label: "Explain architecture",
+    mode: "architecture",
+    needs: "project",
+    message: () =>
+      "Explain the architecture of this project: modules, entry points, and data flow.",
+  },
+];
+
+/** What the next request will tell the agent, shown before it is sent. */
+function AgentContextSummary({
+  includeFile,
+  setIncludeFile,
+  includeSelection,
+  setIncludeSelection,
+}: {
+  includeFile: boolean;
+  setIncludeFile(value: boolean): void;
+  includeSelection: boolean;
+  setIncludeSelection(value: boolean): void;
+}) {
+  const { state } = useWorkspace();
+  const { selection } = useAgent();
+  const cursor = useCursor();
+  const activePath = state.activePath;
+  const buffer = activePath ? state.buffers[activePath] : undefined;
+  const language = activePath
+    ? languageLabel(buffer?.languageOverride ?? detectLanguage(activePath))
+    : null;
+  const problems = activePath
+    ? Object.values(state.diagnostics).reduce(
+        (n, byFile) => n + (byFile[activePath]?.length ?? 0),
+        0,
+      )
+    : 0;
+  const files = state.entries.filter((e) => e.type === "file").length;
+  const selected = selection ? selectionLabel(selection) : null;
+  const sending =
+    !activePath || !includeFile
+      ? "project only"
+      : selected && includeSelection
+        ? "selection + file + related files"
+        : "file + related files";
+  return (
+    <details className="shrink-0 border-b border-border px-2 py-1.5 text-[11px]">
+      <summary className="cursor-pointer text-fg-muted select-none hover:text-fg">
+        <span className="font-semibold text-fg">AI Context</span> ·{" "}
+        {activePath ? (activePath.split("/").pop() ?? activePath) : "no file open"}
+        {selected && includeSelection && includeFile ? ` · ${selected}` : ""}
+        {activePath ? ` · ${plural(problems, "problem")}` : ""}
+      </summary>
+      <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-fg-muted">
+        <dt>Project</dt>
+        <dd className="truncate text-fg">
+          {state.project?.name} ({plural(files, "file")})
+        </dd>
+        <dt>Current file</dt>
+        <dd className="truncate font-mono text-fg" title={activePath ?? undefined}>
+          {activePath ?? "none"}
+        </dd>
+        {language && (
+          <>
+            <dt>Language</dt>
+            <dd className="text-fg">{language}</dd>
+          </>
+        )}
+        {activePath && cursor && (
+          <>
+            <dt>Cursor</dt>
+            <dd className="text-fg">
+              line {cursor.line}, column {cursor.column}
+            </dd>
+          </>
+        )}
+        <dt>Selected code</dt>
+        <dd className="text-fg">{selected ?? "none"}</dd>
+        <dt>Problems</dt>
+        <dd className="text-fg">{activePath ? problems : "-"}</dd>
+        <dt>Context</dt>
+        <dd className="text-fg">{sending}</dd>
+      </dl>
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-fg-muted">
+        <label className="flex items-center gap-1">
+          <input
+            type="checkbox"
+            checked={includeFile}
+            onChange={(e) => setIncludeFile(e.target.checked)}
+            className="accent-accent"
+          />
+          Open file
+        </label>
+        <label className="flex items-center gap-1">
+          <input
+            type="checkbox"
+            checked={includeSelection}
+            disabled={!includeFile || !selection}
+            onChange={(e) => setIncludeSelection(e.target.checked)}
+            className="accent-accent"
+          />
+          Selection
+        </label>
+      </div>
+      <p className="mt-1 text-[10px] leading-snug text-fg-subtle">
+        Only the open file, its selection and problems are sent. The agent then reads related files,
+        symbols and the project structure with its tools as needed (listed under &ldquo;Context
+        used&rdquo;); the whole project is never sent.
+      </p>
+    </details>
+  );
+}
+
+/** A browser-only project cannot use the agent until it is stored on the server. */
+function SaveToServerPrompt() {
+  const { state, actions } = useWorkspace();
+  const [saving, setSaving] = useState<{ done: number; total: number } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const save = async () => {
+    setResult(null);
+    setSaving({ done: 0, total: state.entries.filter((e) => e.type === "file").length });
+    try {
+      const outcome = await actions.saveToServer({
+        onProgress: (p) => setSaving({ done: p.done, total: p.total }),
+      });
+      const skipped = outcome.skipped;
+      setResult({
+        ok: true,
+        message:
+          `Saved ${plural(outcome.uploaded, "file")} to CodeWalk.` +
+          (skipped.length
+            ? ` Not stored: ${skipped
+                .slice(0, 3)
+                .map((s) => `${s.path} (${s.reason})`)
+                .join(", ")}${skipped.length > 3 ? ", …" : ""}.`
+            : ""),
+      });
+    } catch (error) {
+      setResult({
+        ok: false,
+        message: isApiError(error) || error instanceof Error ? error.message : "Saving failed.",
+      });
+    } finally {
+      setSaving(null);
+    }
+  };
+  return (
+    <div className="space-y-1.5 rounded border border-border bg-surface p-2 text-xs">
+      <p className="font-semibold text-fg">Agent unavailable</p>
+      <p className="text-fg-muted">
+        Reason: this project is only in your browser, and the agent works on projects stored by
+        CodeWalk. Save it to CodeWalk to use the agent, history and project search. Your unsaved
+        edits are included.
+      </p>
+      <button
+        type="button"
+        onClick={() => void save()}
+        disabled={Boolean(saving)}
+        className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
+      >
+        {saving ? `Saving… ${saving.done}/${saving.total}` : "Save to CodeWalk"}
+      </button>
+      {result && (
+        <p
+          role={result.ok ? "status" : "alert"}
+          className={result.ok ? "text-fg-muted" : "text-danger"}
+        >
+          {result.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The project-aware agent: the right sidebar of the Coding workspace (chat, context, actions). */
+export function AgentPanel({ onClose }: { onClose?(): void } = {}) {
+  const { status, run, history, newChat, ask, cancel, selection } = useAgent();
   const { state } = useWorkspace();
   const [message, setMessage] = useState("");
   const [includeFile, setIncludeFile] = useState(true);
@@ -460,6 +683,7 @@ export function AgentPanel() {
   const [mode, setMode] = useState<AgentMode>("assist");
   const inputId = useId();
   const modeId = useId();
+  const endRef = useRef<HTMLDivElement>(null);
   const unavailable =
     status.state === "error"
       ? status.message
@@ -468,56 +692,127 @@ export function AgentPanel() {
         : null;
   const serverProject = Boolean(state.project?.serverProjectId);
   const running = run.state === "running";
+  const disabled = !serverProject || Boolean(unavailable);
   const activePath = state.activePath;
-  const problems = activePath
-    ? Object.values(state.diagnostics).reduce(
-        (n, byFile) => n + (byFile[activePath]?.length ?? 0),
-        0,
-      )
-    : 0;
 
+  // Keep the newest message in view.
+  const turns = history.length + (run.state === "idle" ? 0 : 1);
+  useEffect(() => {
+    endRef.current?.scrollIntoView?.({ block: "end" });
+  }, [turns, run.state]);
+
+  const send = (text: string, sendMode: AgentMode) => {
+    if (!text.trim() || running || disabled) return;
+    void ask(text, { includeFile, includeSelection, mode: sendMode });
+    setMessage("");
+  };
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (!message.trim() || running || unavailable || !serverProject) return;
-    void ask(message, { includeFile, includeSelection, mode });
+    send(message, mode);
   };
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) submit();
+    // Enter sends (Shift+Enter for a new line); Ctrl/Cmd+Enter also sends.
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey || !event.shiftKey)) {
+      event.preventDefault();
+      submit();
+    }
   };
+  const runQuick = (action: QuickAction) => {
+    const target = selection && includeSelection ? "the selected code" : "this file";
+    setMode(action.mode);
+    send(action.message(target), action.mode);
+  };
+  const quickDisabled = (action: QuickAction) =>
+    disabled ||
+    running ||
+    (action.needs === "file" && (!activePath || !includeFile)) ||
+    (action.needs === "selection" && (!selection || !includeFile || !includeSelection));
 
   return (
-    <div className="flex h-full min-h-0 flex-col md:flex-row">
+    <aside aria-label="AI Agent" className="flex h-full min-h-0 flex-col bg-surface-sunken">
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border pr-1 pl-2">
+        <Sparkles aria-hidden className="size-3.5 text-accent-text" />
+        <h2 className="text-[11px] font-semibold tracking-wider text-fg uppercase">AI Agent</h2>
+        <span className="flex-1" />
+        <IconButton label="New chat" onClick={newChat}>
+          <MessageSquarePlus aria-hidden className="size-4" />
+        </IconButton>
+        {onClose && (
+          <IconButton label="Close AI Agent" shortcut="Ctrl+Alt+B" onClick={onClose}>
+            <X aria-hidden className="size-4" />
+          </IconButton>
+        )}
+      </div>
+
+      {serverProject && (
+        <AgentContextSummary
+          includeFile={includeFile}
+          setIncludeFile={setIncludeFile}
+          includeSelection={includeSelection}
+          setIncludeSelection={setIncludeSelection}
+        />
+      )}
+
+      <section
+        aria-label="Conversation"
+        aria-live="polite"
+        className="min-h-0 flex-1 space-y-3 overflow-auto p-2"
+      >
+        {!serverProject && state.project ? (
+          <SaveToServerPrompt />
+        ) : unavailable ? (
+          <AiErrorNotice code="ai_not_configured" message={`Agent unavailable: ${unavailable}`} />
+        ) : null}
+        {turns === 0 && serverProject && !unavailable && (
+          <p className="text-[11px] leading-relaxed text-fg-subtle">
+            Ask about this project, the open file, a problem, or request a change. The agent reads
+            your project with CodeWalk&apos;s tools (search, semantic retrieval, project context,
+            diagnostics). It never runs your code and only proposes changes: nothing is applied
+            until you review the diff and choose Apply.
+          </p>
+        )}
+        {history.map((past) => (
+          <article key={past.id} aria-label="Earlier turn">
+            <RunView run={past} />
+          </article>
+        ))}
+        {run.state === "running" && (
+          <article aria-label="Current turn" className="space-y-1.5">
+            <p className="text-[11px] text-fg-subtle">
+              <span className="text-fg-muted">You asked:</span> {run.message}
+            </p>
+            <p role="status" className="flex items-center gap-1.5 text-xs text-fg-muted">
+              <Loader2 aria-hidden className="size-3.5 animate-spin" />
+              Working on “{run.message.slice(0, 80)}”… <Elapsed startedAt={run.startedAt} />
+            </p>
+          </article>
+        )}
+        {run.state === "error" && <AiErrorNotice code={run.code} message={run.message} />}
+        {run.state === "ready" && (
+          <article aria-label="Current turn">
+            <RunView run={run.run} />
+          </article>
+        )}
+        <div ref={endRef} />
+      </section>
+
       <form
         onSubmit={submit}
         aria-label="Ask the agent"
-        className="flex min-h-0 shrink-0 flex-col gap-1.5 overflow-y-auto border-b border-border p-2 md:w-[min(26rem,45%)] md:border-r md:border-b-0"
+        className="shrink-0 space-y-1.5 border-t border-border p-2"
       >
-        {!serverProject ? (
-          <p className="text-xs text-fg-muted">
-            The agent works on projects stored on the server. Open one from the Projects area.
-          </p>
-        ) : unavailable ? (
-          <p role="status" className="text-xs text-fg-muted">
-            Agent unavailable: {unavailable}
-          </p>
-        ) : null}
-        <div className="flex items-center gap-1.5">
-          <label htmlFor={modeId} className="text-[11px] text-fg-muted">
-            Workflow
-          </label>
-          <select
-            id={modeId}
-            value={mode}
-            onChange={(e) => setMode(e.target.value as AgentMode)}
-            disabled={!serverProject || Boolean(unavailable)}
-            className="rounded border border-border bg-surface px-1 py-0.5 text-[11px] text-fg disabled:opacity-60"
-          >
-            {AGENT_MODES.map((m) => (
-              <option key={m} value={m}>
-                {MODE_LABEL[m]}
-              </option>
-            ))}
-          </select>
+        <div role="group" aria-label="Suggested actions" className="flex flex-wrap gap-1">
+          {QUICK_ACTIONS.map((action) => (
+            <button
+              key={action.label}
+              type="button"
+              onClick={() => runQuick(action)}
+              disabled={quickDisabled(action)}
+              className="rounded-full border border-border px-2 py-0.5 text-[10px] text-fg-muted hover:bg-surface-hover hover:text-fg disabled:opacity-40"
+            >
+              {action.label}
+            </button>
+          ))}
         </div>
         <label htmlFor={inputId} className="sr-only">
           Ask about your project
@@ -529,90 +824,53 @@ export function AgentPanel() {
           onKeyDown={onKeyDown}
           rows={3}
           maxLength={4000}
-          disabled={!serverProject || Boolean(unavailable)}
-          placeholder="Ask about this project, the open file, a problem, or request a fix…"
-          className="min-h-[3.75rem] w-full flex-1 resize-none rounded border border-border bg-surface px-2 py-1 text-xs text-fg outline-none placeholder:text-fg-subtle focus:border-accent disabled:opacity-60"
+          disabled={disabled}
+          placeholder={
+            turns > 0
+              ? "Ask a follow-up…"
+              : "Ask about this project, the open file, a problem, or request a fix…"
+          }
+          className="w-full resize-none rounded border border-border bg-surface px-2 py-1 text-xs text-fg outline-none placeholder:text-fg-subtle focus:border-accent disabled:opacity-60"
         />
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-fg-muted">
-          <label className="flex items-center gap-1">
-            <input
-              type="checkbox"
-              checked={includeFile}
-              onChange={(e) => setIncludeFile(e.target.checked)}
-              className="accent-accent"
-            />
-            Open file
-            {activePath
-              ? ` (${activePath.split("/").pop()}, ${problems} problem${problems === 1 ? "" : "s"})`
-              : ""}
-          </label>
-          <label className="flex items-center gap-1">
-            <input
-              type="checkbox"
-              checked={includeSelection}
-              disabled={!includeFile || !selection}
-              onChange={(e) => setIncludeSelection(e.target.checked)}
-              className="accent-accent"
-            />
-            Selection
-            {selection ? ` (${selectionLabel(selection)})` : " (none)"}
-          </label>
-        </div>
         <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="submit"
-            disabled={!message.trim() || running || Boolean(unavailable) || !serverProject}
-            className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
+          <label htmlFor={modeId} className="text-[11px] text-fg-muted">
+            Workflow
+          </label>
+          <select
+            id={modeId}
+            value={mode}
+            onChange={(e) => setMode(e.target.value as AgentMode)}
+            disabled={disabled}
+            className="min-w-0 rounded border border-border bg-surface px-1 py-0.5 text-[11px] text-fg disabled:opacity-60"
           >
-            Ask agent
-          </button>
-          {running && (
+            {AGENT_MODES.map((m) => (
+              <option key={m} value={m}>
+                {MODE_LABEL[m]}
+              </option>
+            ))}
+          </select>
+          <span className="flex-1" />
+          {running ? (
             <button
               type="button"
               onClick={cancel}
-              className="rounded border border-border px-2 py-1 text-xs text-fg hover:bg-surface-hover"
+              className="flex items-center gap-1 rounded border border-border px-2 py-1 text-xs text-fg hover:bg-surface-hover"
             >
-              Cancel
+              <Square aria-hidden className="size-3" />
+              Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              disabled={!message.trim() || disabled}
+              className="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-strong hover:text-on-accent-hover disabled:opacity-50"
+            >
+              <SendHorizontal aria-hidden className="size-3" />
+              Send
             </button>
           )}
-          <span className="text-[10px] text-fg-subtle">Ctrl+Enter</span>
         </div>
-        {!running && !unavailable && serverProject && (
-          <div className="flex flex-wrap gap-1">
-            {SUGGESTIONS[mode].map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setMessage(s)}
-                className="rounded-full border border-border px-2 py-0.5 text-[10px] text-fg-muted hover:bg-surface-hover hover:text-fg"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
       </form>
-      <section
-        aria-label="Agent result"
-        aria-live="polite"
-        className="min-h-0 flex-1 overflow-auto p-2"
-      >
-        {run.state === "idle" && (
-          <p className="text-[11px] leading-relaxed text-fg-subtle">
-            The agent reads your project with CodeWalk&apos;s tools (search, semantic retrieval,
-            project context, diagnostics, analysis). It never runs your code, and it only proposes
-            changes: nothing is applied until you choose Apply.
-          </p>
-        )}
-        {run.state === "running" && (
-          <p role="status" className="flex items-center gap-1.5 text-xs text-fg-muted">
-            <Loader2 aria-hidden className="size-3.5 animate-spin" />
-            Working on “{run.message.slice(0, 80)}”… <Elapsed startedAt={run.startedAt} />
-          </p>
-        )}
-        {run.state === "error" && <AiErrorNotice code={run.code} message={run.message} />}
-        {run.state === "ready" && <RunView run={run.run} />}
-      </section>
-    </div>
+    </aside>
   );
 }

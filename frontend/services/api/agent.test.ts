@@ -134,8 +134,25 @@ describe("agent API client", () => {
         },
       ],
       mode: "assist",
+      history: [],
     });
     expect(init.credentials).toBe("include");
+  });
+
+  it("sends at most the last 8 turns of the conversation", async () => {
+    const { fetchImpl, client } = capture(200, { not: "a run" });
+    const history = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 === 0 ? ("developer" as const) : ("agent" as const),
+      content: `turn ${i}`,
+    }));
+    await expect(
+      runAgent({ projectId: "p1", message: "And then?", history }, client),
+    ).rejects.toMatchObject({ kind: "malformed" });
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    const sent = JSON.parse(String(init.body)).history;
+    expect(sent).toHaveLength(8);
+    expect(sent[0]).toEqual({ role: "developer", content: "turn 2" });
+    expect(sent[7]).toEqual({ role: "agent", content: "turn 9" });
   });
 
   it("omits file content without a file", async () => {

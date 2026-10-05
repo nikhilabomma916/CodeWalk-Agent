@@ -206,7 +206,16 @@ function renderAgent(routes: Route[], fetchImpl?: typeof fetch) {
 
 async function ask(text: string) {
   await userEvent.type(await screen.findByLabelText("Ask about your project"), text);
-  await userEvent.click(screen.getByRole("button", { name: "Ask agent" }));
+  await userEvent.click(screen.getByRole("button", { name: "Send" }));
+}
+
+/** The input is usable again and Send enables as soon as there is text (it clears after sending). */
+async function expectReadyForNextQuestion() {
+  const input = screen.getByLabelText("Ask about your project");
+  expect(input).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "Stop" })).not.toBeInTheDocument();
+  await userEvent.type(input, "next");
+  expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -218,7 +227,7 @@ describe("Agent panel", () => {
       await screen.findByText(/Agent unavailable: AI assistance is turned off/),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Ask about your project")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Ask agent" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(requestsOf(fetchMock).some((r) => r.path === "/agent/run")).toBe(false);
   });
 
@@ -411,7 +420,7 @@ describe("Agent panel", () => {
     await ask("Why?");
     expect(await screen.findByRole("alert")).toHaveTextContent(text);
     expect(screen.queryByText(/Traceback/)).not.toBeInTheDocument(); // never a raw stack trace
-    expect(screen.getByRole("button", { name: "Ask agent" })).toBeEnabled(); // never stuck loading
+    await expectReadyForNextQuestion(); // never stuck loading
   });
 
   it("can cancel a running request", async () => {
@@ -432,9 +441,88 @@ describe("Agent panel", () => {
     renderAgent([], fetchImpl);
     await ask("Long question");
     expect(await screen.findByRole("status")).toHaveTextContent(/Working on/);
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Cancelled/);
-    expect(screen.getByRole("button", { name: "Ask agent" })).toBeEnabled();
+    await expectReadyForNextQuestion();
+  });
+});
+
+describe("Agent chat", () => {
+  it("keeps the conversation and sends earlier turns with a follow-up", async () => {
+    let n = 0;
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      [
+        "POST",
+        /^\/agent\/run$/,
+        () => {
+          n += 1;
+          return json({
+            ...RUN,
+            id: `r${n}`,
+            message: n === 1 ? "Where is the total computed?" : "And who calls it?",
+            answer: n === 1 ? "In shop/cart.py, function `total`." : "checkout() calls it.",
+            actions: [],
+          });
+        },
+      ],
+    ]);
+    await ask("Where is the total computed?");
+    expect(await screen.findByText("In shop/cart.py, function `total`.")).toBeInTheDocument();
+    await ask("And who calls it?");
+    expect(await screen.findByText("checkout() calls it.")).toBeInTheDocument();
+    // Both turns stay visible, oldest first.
+    expect(screen.getByText("In shop/cart.py, function `total`.")).toBeInTheDocument();
+    expect(screen.getAllByRole("article", { name: /turn/ })).toHaveLength(2);
+
+    const runs = requestsOf(fetchMock).filter((r) => r.path === "/agent/run");
+    expect(runs[0].body.history).toEqual([]);
+    expect(runs[1].body.history).toEqual([
+      { role: "developer", content: "Where is the total computed?" },
+      { role: "agent", content: "In shop/cart.py, function `total`." },
+    ]);
+
+    await userEvent.click(screen.getByRole("button", { name: "New chat" }));
+    expect(screen.queryByText("checkout() calls it.")).not.toBeInTheDocument();
+    await ask("Fresh question");
+    await waitFor(() =>
+      expect(requestsOf(fetchMock).filter((r) => r.path === "/agent/run")).toHaveLength(3),
+    );
+    expect(requestsOf(fetchMock).filter((r) => r.path === "/agent/run")[2].body.history).toEqual(
+      [],
+    );
+  });
+
+  it("runs a suggested action on the open file with its workflow", async () => {
+    const fetchMock = renderAgent([
+      ["GET", /^\/agent\/status$/, () => STATUS(true)],
+      ["POST", /^\/agent\/run$/, () => json({ ...RUN, actions: [] })],
+    ]);
+    const actions = await screen.findByRole("group", { name: "Suggested actions" });
+    await waitFor(() =>
+      expect(within(actions).getByRole("button", { name: "Generate tests" })).toBeEnabled(),
+    );
+    // Selection-only actions stay disabled without a selection.
+    expect(within(actions).getByRole("button", { name: "Explain selection" })).toBeDisabled();
+    await userEvent.click(within(actions).getByRole("button", { name: "Generate tests" }));
+    await waitFor(() =>
+      expect(requestsOf(fetchMock).some((r) => r.path === "/agent/run")).toBe(true),
+    );
+    const sent = requestsOf(fetchMock).find((r) => r.path === "/agent/run")!;
+    expect(sent.body).toMatchObject({
+      message: "Generate tests for this file.",
+      mode: "tests",
+      file_path: PATH,
+    });
+  });
+
+  it("shows what context the next request will use", async () => {
+    renderAgent([["GET", /^\/agent\/status$/, () => STATUS(true)]]);
+    const summary = await screen.findByText("AI Context");
+    expect(summary.closest("summary")).toHaveTextContent(/cart\.py · 1 problem/);
+    await userEvent.click(summary);
+    expect(screen.getByText("Python")).toBeInTheDocument();
+    expect(screen.getByText("file + related files")).toBeInTheDocument();
   });
 });
 
@@ -472,7 +560,7 @@ describe("Agent request races", () => {
     const { fetchImpl, answerFirst } = slowFirstRun();
     renderAgent([], fetchImpl);
     await ask("First question");
-    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Stop" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/Cancelled/);
     await userEvent.clear(screen.getByLabelText("Ask about your project"));
     await ask("Second question");

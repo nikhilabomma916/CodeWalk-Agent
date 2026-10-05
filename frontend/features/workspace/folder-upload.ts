@@ -74,6 +74,12 @@ export interface UploadOutcome {
 
 const encoder = new TextEncoder();
 
+/** A file to upload: its project path and how to read its text (throws SourceError to skip it). */
+export interface TextUploadItem {
+  path: string;
+  read(): Promise<string>;
+}
+
 /**
  * Reads the selected files as text and uploads them in batches. Binary files are skipped here;
  * the server checks every file again (paths, credentials, size, existing files) and reports what
@@ -85,8 +91,24 @@ export async function uploadFolder(
   selection: FolderSelection,
   options: { signal?: AbortSignal; onProgress?(progress: UploadProgress): void } = {},
 ): Promise<UploadOutcome> {
+  return uploadTextFiles(
+    projectId,
+    selection.files.map(({ path, file }) => ({ path, read: () => decodeTextFile(file, path) })),
+    options,
+  );
+}
+
+/**
+ * Uploads text files in batches sized by their encoded JSON (under the hosting request limit).
+ * Shared by folder uploads and by saving a browser-only Coding project to the server.
+ */
+export async function uploadTextFiles(
+  projectId: string,
+  items: TextUploadItem[],
+  options: { signal?: AbortSignal; onProgress?(progress: UploadProgress): void } = {},
+): Promise<UploadOutcome> {
   const { signal, onProgress } = options;
-  const total = selection.files.length;
+  const total = items.length;
   const skipped: SkippedFile[] = [];
   let uploaded = 0;
   let done = 0;
@@ -104,11 +126,11 @@ export async function uploadFolder(
     onProgress?.({ done, total, uploaded });
   };
 
-  for (const { path, file } of selection.files) {
+  for (const { path, read } of items) {
     signal?.throwIfAborted();
     let content: string;
     try {
-      content = await decodeTextFile(file, path);
+      content = await read();
     } catch (error) {
       if (!(error instanceof SourceError)) throw error;
       skipped.push({ path, reason: error.reason === "binary" ? "binary file" : error.message });

@@ -23,6 +23,7 @@ import {
   type AgentMode,
   type AgentRun,
   type AgentStatus,
+  type ConversationTurn,
   type ReviewFinding,
 } from "@/services/api/agent";
 import { isApiError } from "@/services/api/errors";
@@ -51,6 +52,10 @@ interface AgentValue {
   status: Remote<AgentStatus>;
   refreshStatus(): Promise<void>;
   run: RunState;
+  /** Earlier finished runs of this chat, oldest first (the current one is `run`). */
+  history: AgentRun[];
+  /** Start a new chat: forget earlier turns (proposals already applied stay applied). */
+  newChat(): void;
   ask(message: string, options: AskOptions): Promise<void>;
   cancel(): void;
   decisions: Record<string, DecisionState>;
@@ -69,6 +74,20 @@ interface AgentValue {
 }
 
 const AgentContext = createContext<AgentValue | null>(null);
+
+const MAX_HISTORY_RUNS = 20;
+const HISTORY_TURN_CHARS = 4000;
+
+/** The chat so far as turns the backend accepts: each question and the answer it got. */
+export function conversationTurns(runs: AgentRun[]): ConversationTurn[] {
+  const turns: ConversationTurn[] = [];
+  for (const run of runs.slice(-4)) {
+    turns.push({ role: "developer", content: run.message.slice(0, HISTORY_TURN_CHARS) });
+    if (run.answer?.trim())
+      turns.push({ role: "agent", content: run.answer.trim().slice(0, HISTORY_TURN_CHARS) });
+  }
+  return turns.slice(-8);
+}
 
 function messageFor(error: unknown, fallback: string): { message: string; code?: string } {
   if (isApiError(error) && error.code === "too_many_agent_runs")
@@ -89,6 +108,13 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const cursor = useCursor();
   const [status, setStatus] = useState<Remote<AgentStatus>>({ state: "loading" });
   const [run, setRun] = useState<RunState>({ state: "idle" });
+  const [history, setHistory] = useState<AgentRun[]>([]);
+  const runRef = useRef(run);
+  const historyRef = useRef(history);
+  useEffect(() => {
+    runRef.current = run;
+    historyRef.current = history;
+  }, [run, history]);
   const [decisions, setDecisions] = useState<Record<string, DecisionState>>({});
   const [reviewing, setReviewing] = useState<AgentAction | null>(null);
   const stateRef = useRef(state);
@@ -128,6 +154,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   if (shownProject !== projectKey) {
     setShownProject(projectKey);
     setRun({ state: "idle" });
+    setHistory([]);
     setDecisions({});
     setReviewing(null);
   }
@@ -163,6 +190,16 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     const abort = new AbortController();
     controller.current = abort;
     const mine = ++token.current;
+    // The finished run becomes an earlier turn of the chat; its answer gives the follow-up context.
+    const previous = runRef.current;
+    const earlier =
+      previous.state === "ready"
+        ? [...historyRef.current, previous.run].slice(-MAX_HISTORY_RUNS)
+        : historyRef.current;
+    if (earlier !== historyRef.current) {
+      historyRef.current = earlier;
+      setHistory(earlier);
+    }
     setRun({ state: "running", message: text, startedAt: Date.now() });
     setReviewing(null);
     try {
@@ -175,6 +212,7 @@ export function AgentProvider({ children }: { children: ReactNode }) {
           selection: fileReady && options.includeSelection ? selectionRef.current : null,
           diagnostics,
           mode: options.mode,
+          history: conversationTurns(earlier),
         },
         undefined,
         abort.signal,
@@ -190,20 +228,31 @@ export function AgentProvider({ children }: { children: ReactNode }) {
 
   const cancel = useCallback(() => controller.current?.abort(), []);
 
-  const replaceAction = useCallback((updated: AgentAction) => {
+  const newChat = useCallback(() => {
+    controller.current?.abort();
+    token.current += 1;
+    setRun({ state: "idle" });
+    setHistory([]);
+    setReviewing(null);
+  }, []);
+
+  /** Apply a change to the actions of the current run and of every earlier turn. */
+  const mapActions = useCallback((map: (action: AgentAction) => AgentAction) => {
     setRun((current) =>
       current.state === "ready"
-        ? {
-            ...current,
-            run: {
-              ...current.run,
-              actions: current.run.actions.map((a) => (a.id === updated.id ? updated : a)),
-            },
-          }
+        ? { ...current, run: { ...current.run, actions: current.run.actions.map(map) } }
         : current,
     );
-    setReviewing((current) => (current?.id === updated.id ? null : current));
+    setHistory((runs) => runs.map((r) => ({ ...r, actions: r.actions.map(map) })));
   }, []);
+
+  const replaceAction = useCallback(
+    (updated: AgentAction) => {
+      mapActions((a) => (a.id === updated.id ? updated : a));
+      setReviewing((current) => (current?.id === updated.id ? null : current));
+    },
+    [mapActions],
+  );
 
   const decide = useCallback(
     async (action: AgentAction, decision: "approve" | "reject") => {
@@ -239,25 +288,13 @@ export function AgentProvider({ children }: { children: ReactNode }) {
         setDecisions(({ [key]: _, ...rest }) => rest);
       } catch (error) {
         if (isApiError(error) && error.code === "stale_action") {
-          setRun((current) =>
-            current.state === "ready"
-              ? {
-                  ...current,
-                  run: {
-                    ...current.run,
-                    actions: current.run.actions.map((a) =>
-                      a.group_id === groupId ? { ...a, status: "stale" } : a,
-                    ),
-                  },
-                }
-              : current,
-          );
+          mapActions((a) => (a.group_id === groupId ? { ...a, status: "stale" } : a));
         }
         const { message } = messageFor(error, `Could not ${decision} the change.`);
         setDecisions((current) => ({ ...current, [key]: { state: "error", message } }));
       }
     },
-    [actions, replaceAction],
+    [actions, mapActions, replaceAction],
   );
 
   const proposeFixFor = useCallback(
@@ -284,6 +321,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       status,
       refreshStatus,
       run,
+      history,
+      newChat,
       ask,
       cancel,
       decisions,
@@ -302,6 +341,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       decide,
       decideGroup,
       decisions,
+      history,
+      newChat,
       openReview,
       proposeFixFor,
       refreshStatus,
