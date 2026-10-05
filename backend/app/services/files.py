@@ -7,7 +7,7 @@ only the newest ``file_version_history_limit`` versions are kept per file.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import MutableSequence, Sequence
 from pathlib import PurePosixPath
 
 from pydantic import TypeAdapter, ValidationError
@@ -80,6 +80,11 @@ class InvalidFileNameError(AppError):
 class UnsupportedFileTypeError(AppError):
     status_code = 422
     code = "unsupported_file_type"
+
+
+class InvalidMoveError(AppError):
+    status_code = 422
+    code = "invalid_move"
 
 
 class ContentTooLargeError(AppError):
@@ -197,6 +202,59 @@ class FileService:
                 "Unsupported file type. CodeWalk Coding supports programming and development files."
             )
         return self.create(project_id, FileCreate(path=name, content=""))
+
+    def _under(self, project_id: uuid.UUID, path: str) -> Sequence[ProjectFile]:
+        """The file at ``path``, or every file in the folder ``path``; 404 when there is neither."""
+        record = self.files.get_by_path(project_id, path)
+        if record is not None:
+            return [record]
+        prefix = path.rstrip("/") + "/"
+        records = list(self.files.list_with_prefix(project_id, prefix))
+        if not records:
+            raise NotFoundError(f"{path} does not exist.", code="path_not_found")
+        return records
+
+    def rename_path(self, project_id: uuid.UUID, from_path: str, to_path: str) -> Sequence[str]:
+        """Renames/moves a file, or a folder with all its files, atomically. Returns the new paths."""
+        self._writable_project(project_id)
+        if from_path == to_path:
+            return []
+        records = self._under(project_id, from_path)
+        single = len(records) == 1 and records[0].path == from_path
+        if not single and (to_path + "/").startswith(from_path.rstrip("/") + "/"):
+            raise InvalidMoveError("A folder cannot be moved into itself.")
+        moving = {r.path for r in records}
+        moves: MutableSequence[tuple[ProjectFile, str]] = []
+        for record in records:
+            wanted = to_path if single else to_path + record.path[len(from_path.rstrip("/")) :]
+            try:
+                new_path = _RELATIVE_PATH.validate_python(wanted)
+            except ValidationError:
+                raise InvalidMoveError(f"{wanted} is not a valid project path.") from None
+            if new_path not in moving and self.files.get_by_path(project_id, new_path) is not None:
+                raise ConflictError(f"{new_path} already exists.", code="file_exists")
+            moves.append((record, new_path))
+        # Shortest old paths first: when a folder moves up into an ancestor, a file's new path can
+        # only equal a shorter old path, which has already been moved by then (into-itself is refused).
+        for record, new_path in sorted(moves, key=lambda move: len(move[0].path)):
+            self._update(
+                project_id, record.id, FileUpdate(path=new_path), FileVersionSource.EDIT, commit=False
+            )
+            self.session.flush()
+        self.session.commit()
+        return [new_path for _, new_path in moves]
+
+    def delete_path(self, project_id: uuid.UUID, path: str) -> Sequence[str]:
+        """Deletes a file, or a folder with all its files, in one transaction. Returns the paths."""
+        project = self._writable_project(project_id)
+        records = self._under(project_id, path)
+        deleted = [r.path for r in records]
+        for record in records:
+            self.activity.record(ActivityType.FILE_DELETED, project, file_path=record.path)
+            self.files.delete(record)
+        self.project_repository.touch(project)
+        self.session.commit()
+        return deleted
 
     def copy_files(self, source_id: uuid.UUID, target_id: uuid.UUID) -> int:
         """Copies every stored file of the developer's project ``source_id`` into ``target_id`` (one

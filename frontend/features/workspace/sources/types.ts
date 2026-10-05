@@ -24,6 +24,12 @@ export interface ProjectSource {
   createFile(path: ProjectPath): Promise<void>;
   /** Coding "+ New File" with the server's stricter checks; sources without it use createFile. */
   createCodeFile?(name: string): Promise<void>;
+  /** Creates a file with content (Duplicate). Sources without it cannot duplicate. */
+  createFileWithContent?(path: ProjectPath, content: string): Promise<void>;
+  /** Renames/moves a file, or a folder with everything in it. Sources without it cannot rename. */
+  renamePath?(from: ProjectPath, to: ProjectPath): Promise<void>;
+  /** Deletes a file, or a folder with everything in it. Sources without it cannot delete. */
+  deletePath?(path: ProjectPath): Promise<void>;
 }
 
 export interface SourceListing {

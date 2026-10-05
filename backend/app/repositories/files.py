@@ -62,6 +62,15 @@ class FileRepository:
         ).all()
         return items, total
 
+    def list_with_prefix(self, project_id: uuid.UUID, prefix: str) -> Sequence[ProjectFile]:
+        """Files whose path starts with ``prefix`` (a folder plus "/"), without their content."""
+        return self.session.scalars(
+            select(ProjectFile)
+            .options(defer(ProjectFile.content), defer(ProjectFile.structure))
+            .where(ProjectFile.project_id == project_id, ProjectFile.path.startswith(prefix, autoescape=True))
+            .order_by(ProjectFile.path)
+        ).all()
+
     def list_all(self, project_id: uuid.UUID) -> Sequence[ProjectFile]:
         """Every file with content; used by project scanning and intelligence."""
         return self.session.scalars(

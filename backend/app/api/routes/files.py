@@ -21,6 +21,9 @@ from app.schemas.projects import (
     FileUpdate,
     FileVersionDetail,
     FileVersionSummary,
+    PathChangeResponse,
+    PathDeleteRequest,
+    PathRenameRequest,
 )
 
 router = APIRouter(
@@ -113,6 +116,34 @@ def import_files(
 ) -> FileImportResponse:
     created, skipped = service.import_files(project_id, data.files)
     return FileImportResponse(created=[to_metadata(record) for record in created], skipped=list(skipped))
+
+
+@router.post(
+    "/rename-path",
+    response_model=PathChangeResponse,
+    summary="Rename or move a file or a folder",
+    description=(
+        "Renames/moves one file, or a folder with every file in it, in one transaction (each file "
+        "records a new version with its new path). 409 `file_exists` if a target path is taken, 422 "
+        "`invalid_move` for a folder moved into itself, 404 `path_not_found`."
+    ),
+)
+def rename_path(
+    project_id: uuid.UUID, data: PathRenameRequest, service: FileServiceDep
+) -> PathChangeResponse:
+    return PathChangeResponse(paths=list(service.rename_path(project_id, data.from_path, data.to_path)))
+
+
+@router.post(
+    "/delete-path",
+    response_model=PathChangeResponse,
+    summary="Delete a file or a folder",
+    description="Deletes one file, or a folder with every file in it, in one transaction.",
+)
+def delete_path(
+    project_id: uuid.UUID, data: PathDeleteRequest, service: FileServiceDep
+) -> PathChangeResponse:
+    return PathChangeResponse(paths=list(service.delete_path(project_id, data.path)))
 
 
 @router.get("", response_model=Page[FileMetadata], summary="List files (metadata only, ordered by path)")

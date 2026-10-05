@@ -91,6 +91,50 @@ function errorMessage(error: unknown, fallback: string): string {
 
 let projectCounter = 0;
 
+export interface FileOperations {
+  /** New file, new folder, rename, move, delete, duplicate. */
+  enabled: boolean;
+  /** Shown when they are not available. */
+  reason: string | null;
+}
+
+/** File operations by project kind: server and in-browser projects support them all. */
+export function fileOperationsFor(
+  project: { kind: string; readOnly: boolean } | null,
+): FileOperations {
+  if (!project) return { enabled: false, reason: "Open a project first." };
+  if (project.readOnly)
+    return { enabled: false, reason: "This project is read-only (linked to a server folder)." };
+  if (project.kind === "server" || project.kind === "memory")
+    return { enabled: true, reason: null };
+  if (project.kind === "local-snapshot")
+    return {
+      enabled: false,
+      reason: "A folder opened as a copy is read-only. Save it to CodeWalk to edit it.",
+    };
+  return {
+    enabled: false,
+    reason:
+      "Renaming and deleting files of a local folder is not supported here. Save it to CodeWalk to manage its files.",
+  };
+}
+
+/** "name copy.ext", then "name copy 2.ext", ... that does not exist yet. */
+export function duplicatePath(
+  path: ProjectPath,
+  exists: (path: ProjectPath) => boolean,
+): ProjectPath {
+  const slash = path.lastIndexOf("/");
+  const folder = slash >= 0 ? path.slice(0, slash + 1) : "";
+  const name = path.slice(slash + 1);
+  const dot = name.lastIndexOf(".");
+  const [stem, ext] = dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""];
+  for (let n = 1; ; n++) {
+    const candidate = `${folder}${stem} copy${n === 1 ? "" : ` ${n}`}${ext}`;
+    if (!exists(candidate)) return candidate;
+  }
+}
+
 /** Browser capabilities never change during a session. */
 const subscribeNever = () => () => {};
 
@@ -114,6 +158,17 @@ export interface WorkspaceActions {
    * Rejects with a SourceError ("exists", "invalid", "read-only", ...) for the dialog to show.
    */
   createCodeFile(name: string): Promise<void>;
+  /** Creates an (empty) folder. Folders are stored through a .gitkeep file inside them. */
+  createFolder(path: ProjectPath): Promise<void>;
+  /** Renames/moves a file or a folder (with everything in it); open files follow, edits kept. */
+  renamePath(from: ProjectPath, to: ProjectPath): Promise<void>;
+  /**
+   * Deletes a file or a folder after asking for confirmation. Resolves false if cancelled.
+   * Unsaved edits in deleted files are discarded (the confirmation says so).
+   */
+  deletePath(path: ProjectPath): Promise<boolean>;
+  /** Copies a file (its current editor content) to "<name> copy.<ext>" and opens the copy. */
+  duplicateFile(path: ProjectPath): Promise<ProjectPath>;
   setLanguage(path: ProjectPath, language: LanguageId | null): void;
   updateSettings(settings: Partial<EditorSettings>): void;
   replaceDiagnostics(source: string, path: ProjectPath, diagnostics: Diagnostic[]): void;
@@ -155,6 +210,8 @@ interface WorkspaceContextValue {
   tree: ProjectFolderNode | null;
   actions: WorkspaceActions;
   canOpenDirectory: boolean;
+  /** Which Explorer operations the open project supports (and why not, when it does not). */
+  fileOperations: FileOperations;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -490,6 +547,89 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         dispatch({ type: "tab/opened", path: fileName });
       },
 
+      async createFolder(path) {
+        const source = sourceRef.current;
+        if (!source) return;
+        const keep = `${path.replace(/\/+$/, "")}/.gitkeep`;
+        if (source.createFileWithContent) await source.createFileWithContent(keep, "");
+        else await source.createFile(keep);
+        if (sourceRef.current !== source) return;
+        dispatch({ type: "file/created", path: keep });
+      },
+
+      async renamePath(from, to) {
+        const source = sourceRef.current;
+        if (!source?.renamePath)
+          throw new SourceError(
+            "read-only",
+            fileOperationsFor(stateRef.current.project).reason ?? "Renaming is not supported here.",
+          );
+        if (from === to) return;
+        await source.renamePath(from, to); // SourceError ("exists", "invalid", ...) for the dialog
+        if (sourceRef.current !== source) return;
+        dispatch({ type: "paths/renamed", from, to });
+      },
+
+      async deletePath(path) {
+        const source = sourceRef.current;
+        if (!source?.deletePath)
+          throw new SourceError(
+            "read-only",
+            fileOperationsFor(stateRef.current.project).reason ?? "Deleting is not supported here.",
+          );
+        const current = stateRef.current;
+        const files = current.entries.filter(
+          (entry) =>
+            entry.type === "file" && (entry.path === path || entry.path.startsWith(`${path}/`)),
+        );
+        const unsaved = files.filter((entry) => isDirty(current.buffers[entry.path])).length;
+        const isFolder = !files.some((entry) => entry.path === path);
+        const choice = await confirm({
+          title: isFolder ? `Delete folder ${path}?` : `Delete ${path}?`,
+          message:
+            (isFolder
+              ? `${files.length} file${files.length === 1 ? "" : "s"} will be deleted. `
+              : "") +
+            (source.persistence === "server"
+              ? "The file history (saved versions) of deleted files is removed as well; the deletion is recorded in History."
+              : "This cannot be undone.") +
+            (unsaved
+              ? ` ${unsaved} file${unsaved === 1 ? " has" : "s have"} unsaved changes that will be lost.`
+              : ""),
+          actions: [
+            { value: "cancel", label: "Cancel" },
+            { value: "delete", label: "Delete", variant: "danger" },
+          ],
+          cancelValue: "cancel",
+        });
+        if (choice !== "delete") return false;
+        await source.deletePath(path);
+        if (sourceRef.current !== source) return true;
+        dispatch({ type: "paths/removed", path });
+        return true;
+      },
+
+      async duplicateFile(path) {
+        const source = sourceRef.current;
+        if (!source?.createFileWithContent)
+          throw new SourceError(
+            "read-only",
+            fileOperationsFor(stateRef.current.project).reason ??
+              "Duplicating is not supported here.",
+          );
+        const current = stateRef.current;
+        const buffer = current.buffers[path];
+        const content = buffer?.status === "ready" ? buffer.content : await source.read(path);
+        const known = new Set(current.entries.map((entry) => entry.path));
+        const target = duplicatePath(path, (candidate) => known.has(candidate));
+        await source.createFileWithContent(target, content);
+        if (sourceRef.current !== source) return target;
+        dispatch({ type: "file/created", path: target });
+        dispatch({ type: "file/loaded", path: target, content });
+        dispatch({ type: "tab/opened", path: target });
+        return target;
+      },
+
       setLanguage(path, language) {
         dispatch({ type: "file/language-set", path, language });
       },
@@ -537,7 +677,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo(
-    () => ({ state, tree, actions, canOpenDirectory }),
+    () => ({
+      state,
+      tree,
+      actions,
+      canOpenDirectory,
+      fileOperations: fileOperationsFor(state.project),
+    }),
     [state, tree, actions, canOpenDirectory],
   );
 

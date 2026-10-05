@@ -145,6 +145,10 @@ export type WorkspaceAction =
   | { type: "tab/opened"; path: ProjectPath }
   | { type: "tab/activated"; path: ProjectPath }
   | { type: "tab/closed"; path: ProjectPath }
+  /** A file, or a folder with everything in it, was renamed/moved by the project source. */
+  | { type: "paths/renamed"; from: ProjectPath; to: ProjectPath }
+  /** A file, or a folder with everything in it, was deleted by the project source. */
+  | { type: "paths/removed"; path: ProjectPath }
   | { type: "settings/changed"; settings: Partial<EditorSettings> }
   | { type: "diagnostics/replaced"; source: string; path: ProjectPath; diagnostics: Diagnostic[] }
   | { type: "editor/reveal"; request: RevealRequest }
@@ -153,6 +157,28 @@ export type WorkspaceAction =
   | { type: "editor/synced"; request: ReplaceRequest }
   | { type: "analysis/updated"; path: ProjectPath; analysis: FileAnalysis }
   | { type: "intelligence/updated"; intelligence: IntelligenceState };
+
+/** True for `path` itself and for everything inside it when it is a folder. */
+export function isUnder(path: ProjectPath, target: ProjectPath): boolean {
+  return path === target || path.startsWith(`${target}/`);
+}
+
+/** `path` after renaming `from` (a file or a folder) to `to`. */
+export function renamedPath(path: ProjectPath, from: ProjectPath, to: ProjectPath): ProjectPath {
+  return isUnder(path, from) ? to + path.slice(from.length) : path;
+}
+
+function mapKeys<T>(
+  record: Record<string, T>,
+  map: (key: string) => string | null,
+): Record<string, T> {
+  const out: Record<string, T> = {};
+  for (const [key, value] of Object.entries(record)) {
+    const next = map(key);
+    if (next !== null) out[next] = value;
+  }
+  return out;
+}
 
 export function isDirty(buffer: FileBuffer | undefined): boolean {
   return !!buffer && buffer.status === "ready" && buffer.content !== buffer.savedContent;
@@ -305,6 +331,58 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
         }),
       );
       return { ...state, openPaths, activePath, buffers, analysis, diagnostics };
+    }
+
+    case "paths/renamed": {
+      const { from, to } = action;
+      const rename = (path: ProjectPath) => renamedPath(path, from, to);
+      const moved = state.entries.map((entry) => ({ ...entry, path: rename(entry.path) }));
+      const known = new Set(moved.map((entry) => entry.path));
+      const folders: ProjectEntry[] = ancestorPaths(to)
+        .filter((path) => !known.has(path))
+        .map((path) => ({ path, type: "folder" }));
+      // Open files follow the rename and keep their unsaved edits.
+      const buffers = mapKeys(state.buffers, rename);
+      for (const [path, buffer] of Object.entries(buffers)) buffers[path] = { ...buffer, path };
+      return {
+        ...state,
+        entries: [...moved, ...folders],
+        buffers,
+        openPaths: state.openPaths.map(rename),
+        activePath: state.activePath === null ? null : rename(state.activePath),
+        analysis: mapKeys(state.analysis, rename),
+        diagnostics: Object.fromEntries(
+          Object.entries(state.diagnostics).map(([source, byFile]) => [
+            source,
+            mapKeys(byFile, rename),
+          ]),
+        ),
+      };
+    }
+
+    case "paths/removed": {
+      const gone = (path: ProjectPath) => isUnder(path, action.path);
+      const keep = (path: string) => (gone(path) ? null : path);
+      const openPaths = state.openPaths.filter((path) => !gone(path));
+      const activeIndex = state.activePath ? state.openPaths.indexOf(state.activePath) : -1;
+      const activePath =
+        state.activePath && gone(state.activePath)
+          ? (openPaths[Math.min(Math.max(activeIndex, 0), openPaths.length - 1)] ?? null)
+          : state.activePath;
+      return {
+        ...state,
+        entries: state.entries.filter((entry) => !gone(entry.path)),
+        buffers: mapKeys(state.buffers, keep),
+        openPaths,
+        activePath,
+        analysis: mapKeys(state.analysis, keep),
+        diagnostics: Object.fromEntries(
+          Object.entries(state.diagnostics).map(([source, byFile]) => [
+            source,
+            mapKeys(byFile, keep),
+          ]),
+        ),
+      };
     }
 
     case "settings/changed":

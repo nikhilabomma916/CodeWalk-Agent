@@ -153,6 +153,35 @@ export async function listFiles(
   }
 }
 
+const pathChangeSchema = z.object({ paths: z.array(z.string()) });
+
+/** Renames/moves a file, or a folder with everything in it (one transaction). Returns new paths. */
+export async function renamePath(
+  projectId: string,
+  fromPath: string,
+  toPath: string,
+  client: ApiClient = apiClient,
+): Promise<string[]> {
+  const { data } = await client.request(
+    `/projects/${encodeURIComponent(projectId)}/files/rename-path`,
+    { method: "POST", body: { from_path: fromPath, to_path: toPath }, schema: pathChangeSchema },
+  );
+  return data.paths;
+}
+
+/** Deletes a file, or a folder with everything in it (one transaction). Returns the deleted paths. */
+export async function deletePath(
+  projectId: string,
+  path: string,
+  client: ApiClient = apiClient,
+): Promise<string[]> {
+  const { data } = await client.request(
+    `/projects/${encodeURIComponent(projectId)}/files/delete-path`,
+    { method: "POST", body: { path }, schema: pathChangeSchema },
+  );
+  return data.paths;
+}
+
 export async function getFileContent(
   projectId: string,
   fileId: string,

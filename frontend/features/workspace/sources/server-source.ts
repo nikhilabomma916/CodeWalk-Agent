@@ -3,6 +3,8 @@ import { isApiError } from "@/services/api/errors";
 import {
   createCodeFile,
   createFile,
+  deletePath,
+  renamePath,
   getFileContent,
   listFiles,
   updateFileContent,
@@ -18,9 +20,15 @@ function toSourceError(error: unknown, path: string): SourceError {
   if (isApiError(error)) {
     if (error.status === 404)
       return new SourceError("not-found", `${path} no longer exists on the server.`);
-    if (error.code === "file_exists") return new SourceError("exists", `${path} already exists.`);
+    // The server names the path that is taken (for a rename, the target, not `path`).
+    if (error.code === "file_exists") return new SourceError("exists", error.message);
     if (error.code === "project_read_only") return new SourceError("read-only", error.message);
-    if (error.code === "invalid_file_name" || error.code === "unsupported_file_type")
+    if (
+      error.code === "invalid_file_name" ||
+      error.code === "unsupported_file_type" ||
+      error.code === "invalid_move" ||
+      error.code === "validation_error"
+    )
       return new SourceError("invalid", error.message);
     if (error.status === 413) return new SourceError("too-large", error.message);
     return new SourceError("io", `${error.message} (${path})`, { cause: error });
@@ -104,6 +112,35 @@ export class ServerProjectSource implements ProjectSource {
     } catch (error) {
       throw toSourceError(error, path);
     }
+  }
+
+  async createFileWithContent(path: ProjectPath, content: string): Promise<void> {
+    if (this.readOnly) throw new SourceError("read-only", "This project is read-only.");
+    try {
+      this.remember(await createFile(this.serverProjectId, path, content));
+    } catch (error) {
+      throw toSourceError(error, path);
+    }
+  }
+
+  async renamePath(from: ProjectPath, to: ProjectPath): Promise<void> {
+    if (this.readOnly) throw new SourceError("read-only", "This project is read-only.");
+    try {
+      await renamePath(this.serverProjectId, from, to);
+    } catch (error) {
+      throw toSourceError(error, from);
+    }
+    await this.list(); // file ids by path changed
+  }
+
+  async deletePath(path: ProjectPath): Promise<void> {
+    if (this.readOnly) throw new SourceError("read-only", "This project is read-only.");
+    try {
+      await deletePath(this.serverProjectId, path);
+    } catch (error) {
+      throw toSourceError(error, path);
+    }
+    await this.list();
   }
 
   async createCodeFile(name: string): Promise<void> {

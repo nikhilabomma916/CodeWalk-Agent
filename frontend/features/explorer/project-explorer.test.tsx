@@ -71,6 +71,7 @@ describe("ProjectExplorer rendering", () => {
         tree,
         actions,
         canOpenDirectory: false,
+        fileOperations: { enabled: true, reason: null },
       };
     };
     set("x = 0\n");

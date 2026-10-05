@@ -118,6 +118,29 @@ class FileImportSkipped(BaseModel):
     message: str
 
 
+class PathRenameRequest(BaseModel):
+    """Rename or move a file, or a folder with everything in it (one transaction)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    from_path: ProjectFilePath = Field(description="An existing file, or a folder (a path prefix).")
+    to_path: ProjectFilePath = Field(description="The new path of the file or folder.")
+
+
+class PathDeleteRequest(BaseModel):
+    """Delete a file, or a folder with everything in it (one transaction)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: ProjectFilePath
+
+
+class PathChangeResponse(BaseModel):
+    """The files that were moved (new paths) or deleted (their former paths)."""
+
+    paths: list[str]
+
+
 class FileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
