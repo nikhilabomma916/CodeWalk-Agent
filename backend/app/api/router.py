@@ -10,6 +10,7 @@ from app.api.routes import (
     analysis,
     auth,
     files,
+    github,
     health,
     history,
     insights,
@@ -41,3 +42,4 @@ api_v1_router.include_router(retrieval.project_router)
 api_v1_router.include_router(agent.router)
 api_v1_router.include_router(insights.router)
 api_v1_router.include_router(memory.router)
+api_v1_router.include_router(github.router)

@@ -7,6 +7,8 @@ they never appear in ``repr()`` output, logs, or API responses.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from enum import StrEnum
 from functools import lru_cache
@@ -36,6 +38,21 @@ AI_PROVIDERS = ("anthropic", "openai", "gemini", "openrouter", "ollama")
 # Model ids as providers spell them: "gpt-5", "gemini-2.5-pro", "vendor/model", "llama3.1:8b".
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+# GitHub OAuth scopes CodeWalk may request: read the account, and read repositories. "repo" is the only
+# scope GitHub offers for private repositories (it also grants write access CodeWalk never uses).
+GITHUB_ALLOWED_SCOPES = frozenset({"repo", "public_repo", "read:user", "read:org"})
+
+
+def decode_encryption_key(value: str) -> bytes | None:
+    """32 key bytes from base64 (url-safe or standard, padding optional); None when it is not one."""
+    text = value.strip()
+    try:
+        key = base64.urlsafe_b64decode(text.replace("+", "-").replace("/", "_") + "=" * (-len(text) % 4))
+    except (ValueError, binascii.Error):
+        return None
+    return key if len(key) == 32 else None
 
 
 def _credential_free_url(value: str, *, schemes: tuple[str, ...]) -> bool:
@@ -199,6 +216,30 @@ class Settings(BaseSettings):
     scan_max_files: int = Field(default=10_000, ge=1, le=100_000)
 
     health_check_timeout_seconds: float = Field(default=3.0, gt=0, le=60)
+
+    # GitHub (Module 20): connect an account with OAuth and import repositories as projects. Off
+    # unless the OAuth app's client id, secret and callback URL and the token encryption key are set.
+    github_client_id: str | None = None
+    github_client_secret: SecretStr | None = None
+    # Must match the OAuth app's "Authorization callback URL": <API origin>/api/v1/github/callback.
+    github_callback_url: str | None = None
+    # OAuth scopes. Empty (default): public repositories only. "repo" also allows private ones, but
+    # GitHub grants read AND write access with it; CodeWalk itself only reads.
+    github_scopes: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    # Where the browser returns after connecting (the frontend). Unset: the first allowed origin,
+    # or the API's own origin when the frontend is served from the same origin.
+    app_url: str | None = None
+    # AES-256-GCM key for GitHub tokens at rest: 32 random bytes, base64 (url-safe or standard).
+    token_encryption_key: SecretStr | None = None
+    # Previous keys, comma-separated, still accepted for decryption during a key rotation.
+    token_encryption_old_keys: SecretStr | None = None
+    github_max_archive_bytes: int = Field(default=50 * 1024 * 1024, ge=1024 * 1024, le=1024 * 1024 * 1024)
+    github_max_repository_bytes: int = Field(
+        default=100 * 1024 * 1024, ge=1024 * 1024, le=2 * 1024 * 1024 * 1024
+    )
+    github_timeout_seconds: float = Field(default=120.0, gt=0, le=600)
+    github_import_max_runs: int = Field(default=10, ge=1, le=1000)
+    github_import_window_seconds: int = Field(default=3600, ge=1, le=86_400)
     # On SIGTERM, in-flight requests get this long to finish before they are cancelled and the
     # shutdown cleanup (TypeScript worker, database pool) runs. Keep it below the host's grace
     # period: 30 s on Vercel and in docker-compose.prod.yml (the container is killed after that).
@@ -337,6 +378,72 @@ class Settings(BaseSettings):
             raise ValueError("OLLAMA_BASE_URL must be an http(s):// URL without credentials")
         return value
 
+    @field_validator("github_client_id", "github_callback_url", "app_url", mode="before")
+    @classmethod
+    def _blank_github_setting_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("github_client_id")
+    @classmethod
+    def _validate_github_client_id(cls, value: str | None) -> str | None:
+        if value is not None and not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", value):
+            raise ValueError("CODEWALK_GITHUB_CLIENT_ID has an unexpected format")
+        return value
+
+    @field_validator("github_callback_url", "app_url")
+    @classmethod
+    def _validate_github_urls(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _credential_free_url(value, schemes=("http", "https")) or urlsplit(value).query:
+            raise ValueError("CODEWALK_GITHUB_CALLBACK_URL and CODEWALK_APP_URL must be plain http(s) URLs")
+        return value.rstrip("/")
+
+    @field_validator("github_scopes", mode="before")
+    @classmethod
+    def _parse_github_scopes(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [scope for scope in re.split(r"[\s,]+", value) if scope]
+        return value
+
+    @field_validator("github_scopes")
+    @classmethod
+    def _validate_github_scopes(cls, value: list[str]) -> list[str]:
+        # Reading repositories never needs more; write or admin scopes are refused outright.
+        unknown = [scope for scope in value if scope not in GITHUB_ALLOWED_SCOPES]
+        if unknown:
+            raise ValueError(
+                "CODEWALK_GITHUB_SCOPES may contain only: " + ", ".join(sorted(GITHUB_ALLOWED_SCOPES))
+            )
+        return sorted(set(value))
+
+    @field_validator(
+        "token_encryption_key", "token_encryption_old_keys", "github_client_secret", mode="before"
+    )
+    @classmethod
+    def _blank_token_key_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("token_encryption_key")
+    @classmethod
+    def _validate_token_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and decode_encryption_key(value.get_secret_value()) is None:
+            raise ValueError("CODEWALK_TOKEN_ENCRYPTION_KEY must be 32 random bytes, base64-encoded")
+        return value
+
+    @field_validator("token_encryption_old_keys")
+    @classmethod
+    def _validate_old_token_keys(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and any(
+            decode_encryption_key(key) is None for key in value.get_secret_value().split(",") if key.strip()
+        ):
+            raise ValueError("CODEWALK_TOKEN_ENCRYPTION_OLD_KEYS must hold base64-encoded 32-byte keys")
+        return value
+
     @field_validator("ai_base_url")
     @classmethod
     def _secure_base_url(cls, value: str | None) -> str | None:
@@ -393,6 +500,12 @@ class Settings(BaseSettings):
                 )
             if self.session_cookie_secure is False:
                 raise ValueError("CODEWALK_SESSION_COOKIE_SECURE cannot be false in production")
+            for name, url in (
+                ("CODEWALK_GITHUB_CALLBACK_URL", self.github_callback_url),
+                ("CODEWALK_APP_URL", self.app_url),
+            ):
+                if url is not None and not url.startswith("https://"):
+                    raise ValueError(f"{name} must use https:// in production")
             # Prompts carry project source code: in production they never cross a network in plain
             # HTTP. A local Ollama on the same host (loopback) is the one exception.
             ollama = urlsplit(self.ollama_base_url) if self.ollama_base_url else None
@@ -459,6 +572,22 @@ class Settings(BaseSettings):
             "openrouter": self.openrouter_api_key,
         }
         return own.get(self.ai_provider_name)  # Ollama needs none (CODEWALK_AI_API_KEY if behind a proxy)
+
+    @property
+    def github_configured(self) -> bool:
+        return bool(
+            self.github_client_id
+            and self.github_client_secret
+            and self.github_callback_url
+            and self.token_encryption_key
+        )
+
+    @property
+    def post_oauth_url(self) -> str:
+        """The frontend's base URL for redirects after GitHub's callback (empty: same origin)."""
+        if self.app_url:
+            return self.app_url
+        return self.cors_origins[0] if self.cors_origins else ""
 
     @property
     def cookie_secure(self) -> bool:

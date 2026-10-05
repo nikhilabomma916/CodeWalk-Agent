@@ -74,6 +74,8 @@ below are placeholders.
 | `RAG_ENABLED` / `RAG_EMBEDDING_PROVIDER` / `RAG_EMBEDDING_MODEL` | for RAG | no | for example `true` / `voyage` / `voyage-code-4` |
 | `VOYAGE_API_KEY` | for RAG | **yes** | embedding key, backend only |
 | `CODEWALK_SHUTDOWN_TIMEOUT_SECONDS` | no | no | default `20`; keep below Vercel's 30 s SIGTERM grace period |
+| `CODEWALK_GITHUB_CLIENT_ID`, `CODEWALK_GITHUB_CALLBACK_URL` | for GitHub import | no | OAuth app id; callback `https://<domain>/api/v1/github/callback` ([github.md](../integrations/github.md)) |
+| `CODEWALK_GITHUB_CLIENT_SECRET`, `CODEWALK_TOKEN_ENCRYPTION_KEY` | for GitHub import | **yes** | OAuth app secret; 32-byte base64 key encrypting stored tokens |
 
 Set by the image (`backend/Dockerfile.vercel`): `CODEWALK_ENV=production`, `CODEWALK_HOST=0.0.0.0`,
 `CODEWALK_PORT=8000`, `CODEWALK_NODE_BINARY`, `CODEWALK_CORS_ORIGINS=` (empty), `FORWARDED_ALLOW_IPS=*` (the container is reachable

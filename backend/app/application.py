@@ -27,6 +27,7 @@ from app.db.session import Database, DatabaseHealthCheck
 from app.services.ai.service import AIService
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
+from app.services.github.client import GitHubClient
 from app.services.health import HealthService
 from app.services.project_search.index import IndexCache
 from app.services.retrieval.service import RetrievalService
@@ -83,6 +84,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         yield
         logger.info("Shutting down %s", settings.app_name)
         typescript_worker.close()
+        app.state.github_client.close()
         if database is not None:
             database.dispose()
 
@@ -119,6 +121,10 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
     app.state.login_limiter = AttemptLimiter(settings.login_max_attempts, settings.login_window_seconds)
     app.state.register_limiter = AttemptLimiter(
         settings.register_max_attempts, settings.register_window_seconds
+    )
+    app.state.github_client = GitHubClient(timeout_seconds=settings.github_timeout_seconds)
+    app.state.github_import_limiter = AttemptLimiter(
+        settings.github_import_max_runs, settings.github_import_window_seconds
     )
 
     register_exception_handlers(app)
