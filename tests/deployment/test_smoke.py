@@ -2,6 +2,7 @@
 
     docker compose -f docker-compose.prod.yml --env-file .env.production up -d --wait
     CODEWALK_SMOKE_URL=https://codewalk.example.com npm run test:smoke
+    CODEWALK_SMOKE_TARGET=vercel CODEWALK_SMOKE_URL=https://<deployment>.vercel.app npm run test:smoke
 
 Every check talks to the real proxy, frontend, backend and database; nothing is mocked. Optional
 providers are never faked: without keys the real "unavailable" behavior is asserted.
@@ -23,6 +24,10 @@ import httpx
 import pytest
 
 BASE_URL = os.environ.get("CODEWALK_SMOKE_URL", "http://127.0.0.1:8080").rstrip("/")
+# "compose" (docker-compose.prod.yml behind nginx, the default) or "vercel" (a Vercel preview or
+# production deployment: no nginx, the platform's own 4.5 MB request limit and compression).
+TARGET = os.environ.get("CODEWALK_SMOKE_TARGET", "compose")
+ON_VERCEL = TARGET == "vercel"
 API = f"{BASE_URL}/api/v1"
 STATE_FILE = os.environ.get("CODEWALK_SMOKE_STATE")
 COOKIE = "codewalk_session"
@@ -79,7 +84,10 @@ def account() -> Iterator[tuple[httpx.Client, str, str]]:
 
 def test_proxy_frontend_and_csp() -> None:
     with _client() as client:
-        assert client.get(f"{BASE_URL}/nginx-health").json() == {"status": "ok"}
+        if ON_VERCEL:
+            assert client.get(f"{BASE_URL}/healthz").status_code == 200  # the frontend service
+        else:
+            assert client.get(f"{BASE_URL}/nginx-health").json() == {"status": "ok"}
         page = client.get(f"{BASE_URL}/login")
         assert page.status_code == 200
         assert "text/html" in page.headers["content-type"]
@@ -93,7 +101,8 @@ def test_proxy_frontend_and_csp() -> None:
         assert page.headers["x-content-type-options"] == "nosniff"
         assert page.headers["x-frame-options"] == "DENY"
         assert "x-powered-by" not in page.headers
-        assert page.headers.get("server") == "nginx"  # no version disclosed
+        if not ON_VERCEL:
+            assert page.headers.get("server") == "nginx"  # no version disclosed
         # The editor is served by this origin (no CDN), as the CSP requires.
         assert client.get(f"{BASE_URL}/monaco/vs/loader.js").status_code == 200
         # Protected pages are client-side guarded; the shell itself renders.
@@ -115,7 +124,8 @@ def test_backend_health_through_proxy() -> None:
         assert database["required"] is True
         assert ready.headers["cache-control"] == "no-store"
         assert ready.headers["content-security-policy"].startswith("default-src 'none'")
-        assert "content-encoding" not in ready.headers  # API responses are never compressed
+        if not ON_VERCEL:  # Vercel's edge may compress responses itself
+            assert "content-encoding" not in ready.headers  # the backend never compresses
         # Interactive docs are off in production and are not routed.
         assert client.get(f"{BASE_URL}/docs").status_code == 404
         assert client.get(f"{API}/openapi.json").status_code == 404
@@ -198,6 +208,16 @@ def test_optional_providers_report_unavailable_without_keys(account: tuple[httpx
 
 def test_request_size_limits() -> None:
     with _client() as client:
+        if ON_VERCEL:
+            # The platform refuses bodies over 4.5 MB before the API (its own 413), and the API
+            # itself is capped at 4,500,000 bytes there.
+            refused = client.post(
+                f"{API}/analysis/code",
+                content=b"x" * 4_600_000,
+                headers={"Content-Type": "application/json"},
+            )
+            assert refused.status_code == 413
+            return
         # Above the backend's 6 MiB limit: the backend answers with its JSON 413.
         backend = client.post(
             f"{API}/analysis/code",

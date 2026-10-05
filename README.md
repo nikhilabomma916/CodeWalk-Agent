@@ -192,9 +192,16 @@ problems, and the selection. The project itself is read on the server through th
   `Referrer-Policy`, `Permissions-Policy`, a `default-src 'none'` CSP and `Cache-Control:
   no-store` on API responses, and HSTS in production. Production startup fails on insecure settings
   (weak secret key, wildcard or `http://` origins, non-secure cookies).
-- **Rate limits** (per user or client, per window): sign-in, registration, AI requests, agent runs,
-  semantic queries, and indexing runs. They are **per process**: with several backend instances,
-  put them behind a shared store (the `AttemptLimiter` interface is the seam) or limit at a proxy.
+- **Rate limits** (per user or client, per window): sign-in (per address and email, and per account
+  from any address), registration, AI requests, agent runs, semantic queries, indexing runs and
+  GitHub imports. With a database they are **shared by every backend instance** through PostgreSQL
+  (`rate_limit_events`, hashed keys, advisory locks), which matters on serverless hosting; without
+  one, or if it is unreachable, they fall back to per-process counters.
+- **Names**: file paths and project names may not contain invisible or direction-changing Unicode
+  characters (bidi overrides, zero-width characters) or segments with leading/trailing spaces, so a
+  file cannot pose as another in the file tree, diffs or proposals.
+- **GitHub**: see [docs/integrations/github.md](docs/integrations/github.md) (OAuth state, encrypted
+  tokens, read-only scopes). Full audit: [docs/security/audit.md](docs/security/audit.md).
 - **Audit log**: security events go to the `app.security` logger as `security.<event>` lines with
   ids and codes only: failed logins (email as a short hash), rate limits, rejected origins,
   cross-user project access, denied agent tools, and proposed / applied / rejected / stale changes.
@@ -344,8 +351,8 @@ The repository-level `.env` is read by both the backend and the frontend (`backe
 | `CODEWALK_REGISTER_MAX_ATTEMPTS`, `CODEWALK_REGISTER_WINDOW_SECONDS` | registrations per address before HTTP 429 |
 | `CODEWALK_FILE_VERSION_HISTORY_LIMIT`, `CODEWALK_ANALYSIS_HISTORY_PER_FILE` | versions / analyses kept per file |
 | `CODEWALK_AI_ENABLED` | turn AI assistance on (default `false`) |
-| `ANTHROPIC_API_KEY` (or `CODEWALK_AI_API_KEY`) | provider credential, **server-side only** |
-| `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | `anthropic`; model (default `claude-opus-5-5`) |
+| `CODEWALK_AI_API_KEY`, or the provider's own `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` | provider credential, **server-side only** (Ollama needs none) |
+| `CODEWALK_AI_PROVIDER`, `CODEWALK_AI_MODEL` | `anthropic` (default), `openai`, `gemini`, `openrouter` or `ollama`; no fallback between them. See [docs/ai/providers.md](docs/ai/providers.md) |
 | `CODEWALK_AI_TIMEOUT_SECONDS`, `CODEWALK_AI_MAX_TOKENS`, `CODEWALK_AI_EFFORT` | request limits and reasoning effort |
 | `CODEWALK_AI_MAX_REQUESTS`, `CODEWALK_AI_WINDOW_SECONDS` | AI requests per user per window (then 429) |
 | `RAG_ENABLED` | turn semantic retrieval on (default `false`) |
@@ -387,6 +394,11 @@ docker compose --profile app stop            # data is kept; never "down -v" unl
 ```
 
 ## Deployment (Module 15)
+
+For a public deployment (Vercel frontend and backend services, managed PostgreSQL with pgvector,
+preview/production environments, `python -m app.preflight`, and the backed-up migration script
+`scripts/migrate-database.mjs`), see [docs/deployment/production.md](docs/deployment/production.md).
+Self-hosting with Docker Compose is described below.
 
 A production-oriented Docker stack: PostgreSQL 17 + pgvector, a one-shot migration job, the FastAPI
 backend and the Next.js frontend as non-root, read-only containers, and an nginx reverse proxy

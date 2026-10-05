@@ -22,12 +22,18 @@ from app.core.middleware import (
     OriginCheckMiddleware,
     RequestContextMiddleware,
 )
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import RateLimiter, make_limiter
 from app.db.session import Database, DatabaseHealthCheck
 from app.services.ai.service import AIService
 from app.services.analysis.engine import AnalysisEngine
 from app.services.analysis.typescript_worker import TypeScriptWorker, TypeScriptWorkerError
+from app.services.github.client import GitHubClient
 from app.services.health import HealthService
+from app.services.health_checks import (
+    ConfigurationHealthCheck,
+    SchemaHealthCheck,
+    TypeScriptWorkerHealthCheck,
+)
 from app.services.project_search.index import IndexCache
 from app.services.retrieval.service import RetrievalService
 
@@ -83,6 +89,7 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         yield
         logger.info("Shutting down %s", settings.app_name)
         typescript_worker.close()
+        app.state.github_client.close()
         if database is not None:
             database.dispose()
 
@@ -103,7 +110,11 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         version=__version__,
         environment=settings.env.value,
         check_timeout_seconds=settings.health_check_timeout_seconds,
-        checks=[DatabaseHealthCheck(database, required=settings.is_production)],
+        checks=[
+            DatabaseHealthCheck(database, required=settings.is_production),
+            SchemaHealthCheck(database, required=settings.is_production),
+            TypeScriptWorkerHealthCheck(typescript_worker),
+        ],
     )
     app.state.database = database
     app.state.analysis_engine = AnalysisEngine.create_default(
@@ -112,13 +123,46 @@ def create_app(settings: Settings | None = None, *, warm_up: bool = True) -> Fas
         typescript_worker=typescript_worker,
     )
 
+    # Limits are shared by every API instance through PostgreSQL when a database is configured
+    # (serverless and multi-instance hosting), and kept per process otherwise.
+    engine = database.engine if database is not None else None
+
+    def limiter(namespace: str, max_attempts: int, window_seconds: float) -> RateLimiter:
+        return make_limiter(engine, max_attempts, window_seconds, namespace=namespace)
+
     app.state.ai_service = AIService(settings)
+    app.state.ai_service.limiter = limiter("ai", settings.ai_max_requests, settings.ai_window_seconds)
     app.state.search_index_cache = IndexCache()
     app.state.retrieval_service = RetrievalService(settings)
-    app.state.agent_limiter = AttemptLimiter(settings.agent_max_runs, settings.agent_window_seconds)
-    app.state.login_limiter = AttemptLimiter(settings.login_max_attempts, settings.login_window_seconds)
-    app.state.register_limiter = AttemptLimiter(
-        settings.register_max_attempts, settings.register_window_seconds
+    app.state.retrieval_service.query_limiter = limiter(
+        "rag-query", settings.rag_max_queries, settings.rag_window_seconds
+    )
+    app.state.retrieval_service.index_limiter = limiter(
+        "rag-index", settings.rag_max_index_runs, settings.rag_window_seconds
+    )
+    app.state.agent_limiter = limiter("agent", settings.agent_max_runs, settings.agent_window_seconds)
+    app.state.login_limiter = limiter("login", settings.login_max_attempts, settings.login_window_seconds)
+    app.state.login_account_limiter = limiter(
+        "login-account", settings.login_account_max_attempts, settings.login_window_seconds
+    )
+    app.state.register_limiter = limiter(
+        "register", settings.register_max_attempts, settings.register_window_seconds
+    )
+    ai_service, retrieval_service = app.state.ai_service, app.state.retrieval_service
+
+    def ai_state() -> tuple[bool, bool, str | None]:
+        state = ai_service.status()
+        return state.enabled, state.configured, state.detail
+
+    def embedding_state() -> tuple[bool, bool, str | None]:
+        state = retrieval_service.status()
+        return state.enabled, state.configured, None
+
+    app.state.health_service.register(ConfigurationHealthCheck("ai_provider", ai_state))
+    app.state.health_service.register(ConfigurationHealthCheck("embeddings", embedding_state))
+    app.state.github_client = GitHubClient(timeout_seconds=settings.github_timeout_seconds)
+    app.state.github_import_limiter = limiter(
+        "github-import", settings.github_import_max_runs, settings.github_import_window_seconds
     )
 
     register_exception_handlers(app)

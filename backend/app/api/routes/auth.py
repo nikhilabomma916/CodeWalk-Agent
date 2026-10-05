@@ -10,7 +10,14 @@ import logging
 
 from fastapi import APIRouter, Request, Response, status
 
-from app.api.deps import AuthServiceDep, CurrentUserDep, LoginLimiterDep, RegisterLimiterDep, SettingsDep
+from app.api.deps import (
+    AuthServiceDep,
+    CurrentUserDep,
+    LoginAccountLimiterDep,
+    LoginLimiterDep,
+    RegisterLimiterDep,
+    SettingsDep,
+)
 from app.core.audit import audit, fingerprint
 from app.core.config import Settings
 from app.core.exceptions import AppError
@@ -91,6 +98,7 @@ def login(
     auth: AuthServiceDep,
     settings: SettingsDep,
     limiter: LoginLimiterDep,
+    account_limiter: LoginAccountLimiterDep,
 ) -> UserResponse:
     key = f"login:{_client(request)}:{data.email}"
     # The attempt is counted before the password is checked, so simultaneous guesses cannot all
@@ -98,12 +106,16 @@ def login(
     if (retry_after := limiter.acquire(key)) is not None:
         audit("rate_limited", level=logging.WARNING, scope="login", client=_client(request))
         raise TooManyAttemptsError(retry_after)
+    if (retry_after := account_limiter.acquire(data.email)) is not None:
+        audit("rate_limited", level=logging.WARNING, scope="login_account", account=fingerprint(data.email))
+        raise TooManyAttemptsError(retry_after)
     try:
         user, token = auth.login(data)
     except InvalidCredentialsError:
         audit("login_failed", level=logging.WARNING, client=_client(request), account=fingerprint(data.email))
         raise
     limiter.reset(key)
+    account_limiter.reset(data.email)
     _set_session_cookie(response, settings, token)
     return UserResponse.model_validate(user)
 

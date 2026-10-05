@@ -10,7 +10,7 @@ Developer request ─► AgentService (ownership, limits, mode)
                       ├─ prompts: SYSTEM = policy + tools + mode guidance (CodeWalk text only)
                       │           USER   = <developer_request> + <developer_notes> + <editor>
                       │                    + <project_data> tool results (escaped)
-                      ├─ AIService.run ─► AIProvider (anthropic | openai) ─► validated JSON step
+                      ├─ AIService.run ─► AIProvider (one of 5, no fallback) ─► validated JSON step
                       ├─ ToolPolicy (permission, repeats, tool-call / proposal budgets)
                       └─ tools ─► ProjectSearchService / insights / context (one user's project)
                                   └─ proposals stored; applied only by explicit approval
@@ -48,15 +48,23 @@ Every relationship is **confirmed** (a resolved import, or use inside the defini
 Providers are registered in `app/services/ai/providers/__init__.py` and selected with
 `CODEWALK_AI_PROVIDER`:
 
-| Provider | Status | Credential |
-| --- | --- | --- |
-| `anthropic` (default) | Supported (Modules 7-11) | `CODEWALK_AI_API_KEY` or `ANTHROPIC_API_KEY` |
-| `openai` | **Experimental** (Module 17): Chat Completions with a JSON-schema response format; also serves compatible servers via `CODEWALK_AI_BASE_URL` (https only; http for localhost) | `CODEWALK_AI_API_KEY` or `OPENAI_API_KEY`; `CODEWALK_AI_MODEL` is required (no model is assumed) |
+| Provider | Endpoint | Credential | Model |
+| --- | --- | --- | --- |
+| `anthropic` (default) | Anthropic SDK | `CODEWALK_AI_API_KEY` or `ANTHROPIC_API_KEY` | `CODEWALK_AI_MODEL` (default `claude-opus-5-5`) |
+| `openai` | `https://api.openai.com/v1`, or `CODEWALK_AI_BASE_URL` (https) | `CODEWALK_AI_API_KEY` or `OPENAI_API_KEY` | `CODEWALK_AI_MODEL` (required) |
+| `gemini` | Google's OpenAI-compatible endpoint | `CODEWALK_AI_API_KEY` or `GEMINI_API_KEY` | `CODEWALK_AI_MODEL` (required) |
+| `openrouter` | `OPENROUTER_BASE_URL` (default `https://openrouter.ai/api/v1`, https only) | `CODEWALK_AI_API_KEY` or `OPENROUTER_API_KEY` | `OPENROUTER_MODEL` or `CODEWALK_AI_MODEL` (required) |
+| `ollama` | `OLLAMA_BASE_URL` (default `http://localhost:11434`; production: https or localhost) | none (optional `CODEWALK_AI_API_KEY` for a proxy) | `OLLAMA_MODEL` or `CODEWALK_AI_MODEL` (required) |
 
-The credential is taken only from `CODEWALK_AI_API_KEY` or the *selected* provider's own variable, so
-one provider's key is never sent to another. The OpenAI-compatible provider is tested against a mock
-transport only; no live call has been made (no credential). With no provider configured, AI features
-report "unavailable" and every deterministic feature keeps working.
+Details, differences between the providers, and limits: [providers.md](providers.md).
+
+- **Explicit selection, no fallback.** Exactly one provider is built. When it fails, the request fails
+  with a normalized error (`ai_timeout`, `ai_rate_limited`, `ai_unavailable`, `ai_provider_error`,
+  `ai_malformed_response`, `ai_context_too_large`, `ai_refused`); no other provider is tried.
+- **No cross-provider keys.** The credential is taken only from `CODEWALK_AI_API_KEY` or the *selected*
+  provider's own variable, so one provider's key is never sent to another. Keys stay server-side.
+- Every provider is tested against a mock transport; no live call has been made (no credential).
+  With no provider configured, AI features report "unavailable" and deterministic features keep working.
 
 ## Prompt-injection defense
 
@@ -117,4 +125,4 @@ memory text.
 - Role classification uses file names, folders, and a few markers; unusual layouts can be misread.
 - No streaming; long agent runs show progress only when they finish.
 - Generated tests are never run by CodeWalk.
-- The OpenAI-compatible provider is experimental.
+- The OpenAI-compatible providers (OpenAI, Gemini, OpenRouter, Ollama) have not been called live.

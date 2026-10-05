@@ -25,11 +25,11 @@ from typing import Any, TypeVar
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
 
-from app.core.config import Settings
+from app.core.config import AI_PROVIDERS, Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.logging import request_id_var
-from app.core.metrics import timed
-from app.core.rate_limit import AttemptLimiter
+from app.core.metrics import METRICS, timed
+from app.core.rate_limit import AttemptLimiter, RateLimiter
 from app.db.models import ActivityType, Analysis, AnalysisStatus, AnalysisType, Project, ProjectFile, User
 from app.repositories.analyses import AnalysisRepository
 from app.repositories.files import FileRepository
@@ -55,7 +55,9 @@ from app.schemas.ai import (
 from app.services.activity import ActivityRecorder
 from app.services.ai import edits as edit_rules
 from app.services.ai.base import (
+    AIContextTooLargeError,
     AIDisabledError,
+    AIError,
     AIMalformedResponseError,
     AINotConfiguredError,
     AIProvider,
@@ -108,14 +110,17 @@ class AIService:
 
     def __init__(self, settings: Settings, provider: AIProvider | None = None) -> None:
         self.settings = settings
-        self.limiter = AttemptLimiter(settings.ai_max_requests, settings.ai_window_seconds)
+        # Replaced by a shared (PostgreSQL) limiter in create_app when a database is configured.
+        self.limiter: RateLimiter = AttemptLimiter(settings.ai_max_requests, settings.ai_window_seconds)
         self.provider: AIProvider | None = provider
         self.provider_problem: str | None = None
         if provider is None and settings.ai_enabled:
             try:
                 self.provider = create_provider(settings)
             except UnknownProviderError as exc:
-                self.provider_problem = f"Unknown AI provider {exc.args[0]!r} (supported: anthropic, openai)."
+                self.provider_problem = (
+                    f"Unknown AI provider {exc.args[0]!r} (supported: {', '.join(AI_PROVIDERS)})."
+                )
 
     def status(self) -> AIStatusResponse:
         enabled = self.settings.ai_enabled
@@ -161,18 +166,45 @@ class AIService:
         *,
         timeout_seconds: float | None = None,
     ) -> tuple[ModelT, StructuredResult]:
-        with timed("ai_provider_call"):
-            result = provider.generate_structured(
-                StructuredRequest(
-                    system=system,
-                    user=user,
-                    schema=output_schema(output),
-                    max_tokens=self.settings.ai_max_tokens,
-                    timeout_seconds=min(
-                        timeout_seconds or self.settings.ai_timeout_seconds, self.settings.ai_timeout_seconds
-                    ),
-                    effort=self.settings.ai_effort,
+        # Checked before any provider call: an oversized prompt would only cost money and fail.
+        if len(system) + len(user) > self.settings.ai_max_input_chars:
+            raise AIContextTooLargeError(
+                f"The request is larger than the {self.settings.ai_max_input_chars} character AI input limit."
+            )
+        started = time.perf_counter()
+        outcome = "error"
+        usage: dict[str, int] | None = None
+        try:
+            with timed("ai_provider_call"):
+                result = provider.generate_structured(
+                    StructuredRequest(
+                        system=system,
+                        user=user,
+                        schema=output_schema(output),
+                        max_tokens=self.settings.ai_max_tokens,
+                        timeout_seconds=min(
+                            timeout_seconds or self.settings.ai_timeout_seconds,
+                            self.settings.ai_timeout_seconds,
+                        ),
+                        effort=self.settings.ai_effort,
+                    )
                 )
+            outcome, usage = "ok", result.usage
+        except AIError as exc:
+            outcome = exc.code
+            raise
+        finally:
+            # Labels come from the server's configuration and fixed error codes; never prompts.
+            seconds = time.perf_counter() - started
+            METRICS.observe_ai(provider.name, provider.model or "-", outcome, seconds, usage)
+            logger.info(
+                "AI request provider=%s model=%s outcome=%s duration_ms=%d input_tokens=%s output_tokens=%s",
+                provider.name,
+                provider.model or "-",
+                outcome,
+                round(seconds * 1000),
+                (usage or {}).get("input_tokens", 0),
+                (usage or {}).get("output_tokens", 0),
             )
         try:
             return output.model_validate(result.data), result

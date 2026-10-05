@@ -79,6 +79,8 @@ def _clean_tables(request: pytest.FixtureRequest) -> Iterator[None]:
         with engine.begin() as connection:
             # users cascades to every owned table (sessions, projects, files, analyses, history).
             connection.execute(text("TRUNCATE users CASCADE"))
+            # Shared rate-limit counters are not owned by users (Module 21).
+            connection.execute(text("TRUNCATE rate_limit_events"))
 
 
 @pytest.fixture

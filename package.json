@@ -28,7 +28,7 @@
     "test:security": "uv --directory backend run pytest -p no:cacheprovider -ra tests/test_agent_unit.py tests/test_paths.py tests/test_config.py tests/db/test_security_api.py tests/db/test_secret_paths_api.py tests/db/test_ownership_api.py tests/db/test_auth_api.py tests/db/test_agent_api.py tests/db/test_fixture_projects_api.py tests/db/test_concurrency_api.py",
     "test:perf": "uv --directory backend run python ../scripts/performance.py",
     "test:runner": "node --test scripts/runner.test.mjs",
-    "test:infra": "uv --directory backend run pytest -p no:cacheprovider -ra ../tests/deployment/test_infrastructure.py ../tests/deployment/test_vercel_config.py",
+    "test:infra": "uv --directory backend run pytest -p no:cacheprovider -ra ../tests/deployment/test_infrastructure.py ../tests/deployment/test_vercel_config.py ../tests/deployment/test_production_config.py",
     "test:smoke": "uv --directory backend run pytest -p no:cacheprovider -ra ../tests/deployment/test_smoke.py",
     "test:deploy": "node scripts/deploy-lifecycle.mjs",
     "prod:config": "docker compose -f docker-compose.prod.yml --env-file .env.production config -q"

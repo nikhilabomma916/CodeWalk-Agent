@@ -19,6 +19,7 @@ from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.logging import request_id_var
+from app.core.metrics import METRICS
 from app.schemas.errors import ErrorBody, ErrorDetail, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ def error_response(
     details: list[ErrorDetail] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
+    METRICS.count_error(status_code, code)
     body = ErrorResponse(
         error=ErrorBody(code=code, message=message, request_id=request_id_var.get(), details=details)
     )

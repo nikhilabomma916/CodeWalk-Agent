@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
+from app.core.metrics import METRICS
 from app.db.models import AgentAction, AgentRun
 from app.services.ai.base import AITimeoutError
 from app.services.ai.service import AIService
@@ -474,10 +475,13 @@ def test_agent_runs_are_rate_limited(make_client: Callable[..., Any]) -> None:
     client, _, _ = make_client(answer(), answer(), agent_max_runs=1)
     project = make_project(client)
     assert run(client, project).status_code == 200
+    before = METRICS.counter_value("rate_limited", ("agent",))
     limited = run(client, project)
     assert limited.status_code == 429
     assert limited.json()["error"]["code"] == "too_many_agent_runs"
     assert "Retry-After" in limited.headers
+    # Refused by the early retry_after check: counted exactly once (the inspection itself counts nothing).
+    assert METRICS.counter_value("rate_limited", ("agent",)) == before + 1
 
 
 def test_agent_ownership_isolation(

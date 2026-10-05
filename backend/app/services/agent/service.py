@@ -31,7 +31,7 @@ from app.core.audit import audit
 from app.core.config import Settings
 from app.core.exceptions import AppError, NotFoundError
 from app.core.metrics import METRICS
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import RateLimiter
 from app.db.models import (
     ActivityType,
     AgentAction,
@@ -133,7 +133,7 @@ class AgentService:
         settings: Settings,
         owner: User,
         ai: AIService,
-        limiter: AttemptLimiter,
+        limiter: RateLimiter,
         search: ProjectSearchService,
         context_builder: ProjectContextBuilder,
         engine: AnalysisEngine,
@@ -211,6 +211,7 @@ class AgentService:
         provider = self._provider()
         key = f"agent:{self.owner.id}"
         if (retry_after := self.limiter.retry_after(key)) is not None:
+            METRICS.count_rate_limited(self.limiter.name)  # retry_after only inspects; this refuses
             audit("rate_limited", level=logging.WARNING, scope="agent", user=self.owner.id)
             raise AgentRunLimitError(retry_after)
         project, index = self.search.project_index(request.project_id)  # 404 for other users' projects

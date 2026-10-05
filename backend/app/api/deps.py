@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import DatabaseNotConfiguredError
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import RateLimiter
 from app.db.models import User
 from app.db.session import Database
 from app.services.activity import HistoryService
@@ -68,13 +68,18 @@ AnalysisEngineDep = Annotated[AnalysisEngine, Depends(get_analysis_engine)]
 SessionDep = Annotated[Session, Depends(get_db_session)]
 
 
-def get_login_limiter(request: Request) -> AttemptLimiter:
-    limiter: AttemptLimiter = request.app.state.login_limiter
+def get_login_limiter(request: Request) -> RateLimiter:
+    limiter: RateLimiter = request.app.state.login_limiter
     return limiter
 
 
-def get_register_limiter(request: Request) -> AttemptLimiter:
-    limiter: AttemptLimiter = request.app.state.register_limiter
+def get_login_account_limiter(request: Request) -> RateLimiter:
+    limiter: RateLimiter = request.app.state.login_account_limiter
+    return limiter
+
+
+def get_register_limiter(request: Request) -> RateLimiter:
+    limiter: RateLimiter = request.app.state.register_limiter
     return limiter
 
 
@@ -83,8 +88,9 @@ def get_auth_service(session: SessionDep, settings: SettingsDep) -> AuthService:
 
 
 AuthServiceDep = Annotated[AuthService, Depends(get_auth_service)]
-LoginLimiterDep = Annotated[AttemptLimiter, Depends(get_login_limiter)]
-RegisterLimiterDep = Annotated[AttemptLimiter, Depends(get_register_limiter)]
+LoginLimiterDep = Annotated[RateLimiter, Depends(get_login_limiter)]
+LoginAccountLimiterDep = Annotated[RateLimiter, Depends(get_login_account_limiter)]
+RegisterLimiterDep = Annotated[RateLimiter, Depends(get_register_limiter)]
 
 
 # Tokens are issued by secrets.token_urlsafe(32): 43 URL-safe characters.
@@ -200,8 +206,8 @@ ContextBuilderDep = Annotated[ProjectContextBuilder, Depends(get_context_builder
 AIAssistantDep = Annotated[AIAssistant, Depends(get_ai_assistant)]
 
 
-def get_agent_limiter(request: Request) -> AttemptLimiter:
-    limiter: AttemptLimiter = request.app.state.agent_limiter
+def get_agent_limiter(request: Request) -> RateLimiter:
+    limiter: RateLimiter = request.app.state.agent_limiter
     return limiter
 
 
@@ -210,7 +216,7 @@ def get_agent_service(
     settings: SettingsDep,
     user: CurrentUserDep,
     ai: AIServiceDep,
-    limiter: Annotated[AttemptLimiter, Depends(get_agent_limiter)],
+    limiter: Annotated[RateLimiter, Depends(get_agent_limiter)],
     search: SearchServiceDep,
     builder: ContextBuilderDep,
     engine: AnalysisEngineDep,

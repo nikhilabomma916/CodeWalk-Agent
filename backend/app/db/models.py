@@ -10,6 +10,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -86,6 +87,8 @@ class ActivityType(StrEnum):
     AGENT_RUN = "agent.run"
     AGENT_ACTION_APPLIED = "agent.action_applied"
     AGENT_ACTION_REJECTED = "agent.action_rejected"
+    # GitHub (Module 20): a repository imported as a project.
+    GITHUB_IMPORTED = "github.imported"
 
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -146,6 +149,52 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         # Each user's project names are unique regardless of letter case.
         Index("uq_projects_owner_id_lower_name", owner_id, func.lower(name), unique=True),
     )
+
+
+class GitHubConnection(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A user's connected GitHub account (Module 20). One per user.
+
+    The OAuth access token is stored only encrypted (AES-256-GCM, bound to the user id; see
+    app.core.crypto) and is never returned by the API, logged, or given to AI or retrieval.
+    """
+
+    __tablename__ = "github_connections"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    github_login: Mapped[str] = mapped_column(String(39), nullable=False)
+    scopes: Mapped[str] = mapped_column(String(200), nullable=False, default="", server_default="")
+    token_ciphertext: Mapped[str] = mapped_column(Text, nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ProjectSource(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Where an imported project's files came from (Module 20): a GitHub repository at one commit.
+
+    Kept so a project can later be compared with or updated from its repository.
+    """
+
+    __tablename__ = "project_sources"
+
+    project_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    provider: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="github", server_default="github"
+    )
+    repository_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    full_name: Mapped[str] = mapped_column(String(140), nullable=False)
+    branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String(40), nullable=False)
+    is_private: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    files_imported: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    files_skipped: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    __table_args__ = (Index("ix_project_sources_repository_id_branch", repository_id, branch),)
 
 
 class ProjectFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -446,3 +495,19 @@ class ProjectMemory(UUIDPrimaryKeyMixin, CreatedAtMixin, Base):
     text: Mapped[str] = mapped_column(String(500), nullable=False)
 
     __table_args__ = (Index("ix_project_memories_project_id_created_at", "project_id", "created_at"),)
+
+
+class RateLimitEvent(Base):
+    """One counted attempt for a shared rate limit (Module 21; see app.core.rate_limit).
+
+    Not tied to a user: keys are SHA-256 hashes of the limit's namespace and key (client address,
+    email address or user id). Rows outside every window are deleted by the limiter.
+    """
+
+    __tablename__ = "rate_limit_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_rate_limit_events_key_hash_occurred_at", key_hash, occurred_at),)

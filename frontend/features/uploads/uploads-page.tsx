@@ -2,7 +2,7 @@
 
 import { FolderUp, RefreshCw, Trash2 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -12,6 +12,7 @@ import { StateMessage } from "@/components/ui/state-message";
 import { LanguageList, ProjectStatusBadges } from "@/features/projects/projects-page";
 import { selectFolder, type FolderSelection } from "@/features/workspace/folder-upload";
 import { UploadFolderDialog } from "@/features/workspace/upload-folder-dialog";
+import { GitHubImportPanel } from "./github-import-panel";
 import { formatDate, formatRelativeTime, plural } from "@/lib/format";
 import { isApiError } from "@/services/api/errors";
 import { deleteProject, listProjects, type ServerProject } from "@/services/api/projects";
@@ -27,6 +28,7 @@ type ListState =
  */
 export function UploadsPage() {
   const router = useRouter();
+  const githubResult = useSearchParams().get("github");
   const confirm = useConfirm();
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<ListState>({ status: "loading" });
@@ -106,6 +108,7 @@ export function UploadsPage() {
         </>
       }
     >
+      <GitHubImportPanel callbackResult={githubResult} onImported={() => void load()} />
       {state.status === "loading" && <StateMessage title="Loading uploads…" />}
       {state.status === "error" && (
         <StateMessage
