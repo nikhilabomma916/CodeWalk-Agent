@@ -144,3 +144,39 @@ def test_streamed_oversized_body_is_rejected(client_factory: Callable[[FastAPI],
     )
     assert response.status_code == 413
     assert_error_shape(response.json(), "payload_too_large")
+
+
+def _padded_json(size: int) -> bytes:
+    """A valid probe payload of exactly ``size`` bytes (JSON allows trailing whitespace)."""
+    body = b'{"name": "demo", "count": 3}'
+    return body + b" " * (size - len(body))
+
+
+def test_body_exactly_at_the_limit_is_accepted(client_factory: Callable[[FastAPI], TestClient]) -> None:
+    client = client_factory(app_with_probe_routes(max_body_bytes=1000))
+    response = client.post(
+        "/api/v1/_probe/echo", content=_padded_json(1000), headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 200
+    assert response.json() == {"name": "demo", "count": 3}
+
+
+def test_body_one_byte_over_the_limit_is_rejected(client_factory: Callable[[FastAPI], TestClient]) -> None:
+    client = client_factory(app_with_probe_routes(max_body_bytes=1000))
+    response = client.post(
+        "/api/v1/_probe/echo", content=_padded_json(1001), headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 413
+    error = assert_error_shape(response.json(), "payload_too_large")
+    assert error["message"] == "Request body exceeds the 1000 byte limit."
+
+
+def test_streamed_body_at_the_limit_is_accepted(client_factory: Callable[[FastAPI], TestClient]) -> None:
+    client = client_factory(app_with_probe_routes(max_body_bytes=1000))
+    body = _padded_json(1000)
+    response = client.post(
+        "/api/v1/_probe/echo",
+        content=(body[i : i + 100] for i in range(0, len(body), 100)),
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 200

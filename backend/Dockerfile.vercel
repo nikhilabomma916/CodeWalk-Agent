@@ -1,0 +1,76 @@
+# CodeWalk Agent backend: container image for the Vercel "backend" service (see /vercel.json).
+#
+# Build context: backend/   (the service root; see backend/.dockerignore)
+#
+# The same stages as backend/Dockerfile (tests/deployment/test_vercel_config.py keeps them in
+# step), with these differences for Vercel Functions:
+#   - The server listens on Vercel's PORT: Vercel sets VERCEL=1 and app.__main__ then uses PORT
+#     (default 80). Set PORT=8000 in the project's environment variables so the non-root user
+#     never needs a privileged port; CODEWALK_PORT=8000 below keeps both paths on the same port.
+#   - FORWARDED_ALLOW_IPS=*: the container is reachable only through Vercel's network, which sets
+#     X-Forwarded-For/-Proto, so the rate limiters see real client addresses.
+#   - CODEWALK_CORS_ORIGINS is empty by default (as docker-compose.prod.yml sets it when no public
+#     origin is given): only the deployment's own VERCEL_* URLs are allowed until the project sets
+#     CODEWALK_CORS_ORIGINS=https://<custom-domain>. The development default (localhost) is refused
+#     in production.
+#   - No HEALTHCHECK: Vercel does not run Docker health checks; /api/v1/health/ready is still served.
+#   - Migrations never run here; run `alembic upgrade head` as a separate step (docs/deployment/vercel.md).
+#
+# Nothing secret is baked in: configuration comes from the Vercel project's environment variables.
+# On SIGTERM (scale-in, with a 30 s grace period) uvicorn drains requests for
+# CODEWALK_SHUTDOWN_TIMEOUT_SECONDS (20 s by default), then closes the TypeScript worker and the pool.
+
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG NODE_IMAGE=node:22-bookworm-slim
+
+FROM ghcr.io/astral-sh/uv:0.12.17 AS uv
+
+FROM ${PYTHON_IMAGE} AS python-deps
+COPY --from=uv /uv /usr/local/bin/uv
+# Use the image's Python (the runtime stage has the same one) and never download another.
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_PYTHON=/usr/local/bin/python3.12 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_LINK_MODE=copy \
+    UV_COMPILE_BYTECODE=1 \
+    UV_NO_CACHE=1
+WORKDIR /build
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+FROM ${NODE_IMAGE} AS ts-tools
+WORKDIR /build/tools/typescript-analyzer
+COPY tools/typescript-analyzer/package.json tools/typescript-analyzer/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
+FROM ${NODE_IMAGE} AS node-binary
+
+FROM ${PYTHON_IMAGE} AS runtime
+# Node runs the TypeScript analyzer worker (a single binary; its libraries are in the base image).
+COPY --from=node-binary /usr/local/bin/node /usr/local/bin/node
+RUN groupadd --system --gid 10001 codewalk \
+    && useradd --system --uid 10001 --gid codewalk --home-dir /app --no-create-home --shell /usr/sbin/nologin codewalk
+COPY --from=python-deps /opt/venv /opt/venv
+WORKDIR /app
+COPY --chown=root:root alembic.ini ./
+COPY --chown=root:root migrations ./migrations
+COPY --chown=root:root app ./app
+COPY --chown=root:root tools/typescript-analyzer/analyzer.mjs tools/typescript-analyzer/package.json ./tools/typescript-analyzer/
+COPY --from=ts-tools --chown=root:root /build/tools/typescript-analyzer/node_modules ./tools/typescript-analyzer/node_modules
+
+# Code is owned by root and read-only to the service user; the app writes nothing to disk.
+ENV PATH=/opt/venv/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    CODEWALK_ENV=production \
+    CODEWALK_HOST=0.0.0.0 \
+    CODEWALK_PORT=8000 \
+    CODEWALK_NODE_BINARY=/usr/local/bin/node \
+    CODEWALK_CORS_ORIGINS="" \
+    FORWARDED_ALLOW_IPS=*
+
+USER codewalk:codewalk
+EXPOSE 8000
+
+# uvicorn (via app.__main__): proxy headers trusted (production); SIGTERM triggers a graceful shutdown.
+CMD ["python", "-m", "app"]

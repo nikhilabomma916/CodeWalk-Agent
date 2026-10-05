@@ -16,6 +16,12 @@ const nextConfig: NextConfig = {
   // The full-screen layout has controls in every corner (the account menu sits where the dev
   // indicator would). Compile and runtime errors are still shown in development.
   devIndicators: false,
+  // On Vercel the API is the "backend" service of the same deployment, routed at /api
+  // (vercel.json), so the browser calls it on the page's own origin unless configured otherwise.
+  env:
+    process.env.VERCEL === "1" && !process.env.NEXT_PUBLIC_API_BASE_URL?.trim()
+      ? { NEXT_PUBLIC_API_BASE_URL: "/api/v1" }
+      : {},
   async headers() {
     return [
       {

@@ -7,6 +7,7 @@ they never appear in ``repr()`` output, logs, or API responses.
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
@@ -21,6 +22,14 @@ REPO_ROOT = BACKEND_DIR.parent
 # Later files override earlier ones: the repository-level .env is shared with
 # the frontend, backend/.env can hold backend-only overrides.
 ENV_FILES = (REPO_ROOT / ".env", BACKEND_DIR / ".env")
+
+# A bare host name as Vercel provides it in VERCEL_URL and friends, e.g. "codewalk-abc123.vercel.app".
+_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_HOST_NAME = re.compile(rf"^(?=.{{1,253}}$){_LABEL}(?:\.{_LABEL})+$")
+
+# Vercel Functions refuse request bodies over 4.5 MB (413 FUNCTION_PAYLOAD_TOO_LARGE, not this API's
+# JSON error) before the application sees them. On Vercel the API's own limit is capped at that.
+VERCEL_MAX_REQUEST_BODY_BYTES = 4_500_000
 
 INSECURE_SECRET_KEYS = frozenset({"", "change-me", "changeme", "secret", "dev-secret-key"})
 MIN_PRODUCTION_SECRET_KEY_LENGTH = 32
@@ -128,7 +137,8 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_format: Literal["text", "json"] = "text"
 
-    # Must exceed max_source_bytes: JSON encoding can expand source text.
+    # Must exceed max_source_bytes: JSON encoding can expand source text. On Vercel the effective
+    # limit is at most VERCEL_MAX_REQUEST_BODY_BYTES (see request_body_limit).
     max_request_body_bytes: int = Field(default=6 * 1024 * 1024, gt=0)
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, gt=0)
 
@@ -162,6 +172,21 @@ class Settings(BaseSettings):
     scan_max_files: int = Field(default=10_000, ge=1, le=100_000)
 
     health_check_timeout_seconds: float = Field(default=3.0, gt=0, le=60)
+    # On SIGTERM, in-flight requests get this long to finish before they are cancelled and the
+    # shutdown cleanup (TypeScript worker, database pool) runs. Keep it below the host's grace
+    # period: 30 s on Vercel and in docker-compose.prod.yml (the container is killed after that).
+    shutdown_timeout_seconds: int = Field(default=20, ge=1, le=600)
+
+    # Vercel (read only when VERCEL=1, which Vercel sets in its build and runtime environments).
+    # The deployment's own URLs are allowed origins, so a preview or production deployment accepts
+    # requests from its own pages without listing each generated URL in CODEWALK_CORS_ORIGINS.
+    # All are bare host names (no scheme); the origin is always https://<host>.
+    vercel: str | None = Field(default=None, validation_alias="vercel")
+    vercel_url: str | None = Field(default=None, validation_alias="vercel_url")
+    vercel_branch_url: str | None = Field(default=None, validation_alias="vercel_branch_url")
+    vercel_project_production_url: str | None = Field(
+        default=None, validation_alias="vercel_project_production_url"
+    )
 
     @field_validator("cors_origins", mode="before")
     @classmethod
@@ -221,6 +246,25 @@ class Settings(BaseSettings):
             raise ValueError("CODEWALK_WORKSPACE_ROOT must be an existing directory")
         return value.resolve()
 
+    @field_validator(
+        "vercel", "vercel_url", "vercel_branch_url", "vercel_project_production_url", mode="before"
+    )
+    @classmethod
+    def _blank_platform_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("vercel_url", "vercel_branch_url", "vercel_project_production_url")
+    @classmethod
+    def _validate_host_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        host = value.strip().lower()
+        if not _HOST_NAME.match(host):
+            raise ValueError("VERCEL_*_URL values must be host names such as app.vercel.app")
+        return host
+
     @field_validator("node_binary", mode="before")
     @classmethod
     def _blank_node_to_none(cls, value: object) -> object:
@@ -250,8 +294,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_limits(self) -> Settings:
-        if self.max_request_body_bytes <= self.max_source_bytes:
-            raise ValueError("CODEWALK_MAX_REQUEST_BODY_BYTES must be larger than CODEWALK_MAX_SOURCE_BYTES")
+        if self.request_body_limit <= self.max_source_bytes:
+            message = "CODEWALK_MAX_REQUEST_BODY_BYTES must be larger than CODEWALK_MAX_SOURCE_BYTES"
+            if self.on_vercel:
+                message += f" (on Vercel it is at most {VERCEL_MAX_REQUEST_BODY_BYTES} bytes)"
+            raise ValueError(message)
         return self
 
     @model_validator(mode="after")
@@ -279,6 +326,27 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.env is Environment.PRODUCTION
+
+    @property
+    def on_vercel(self) -> bool:
+        return self.vercel == "1"
+
+    @property
+    def request_body_limit(self) -> int:
+        """CODEWALK_MAX_REQUEST_BODY_BYTES, capped on Vercel at the platform's request body limit."""
+        if self.on_vercel:
+            return min(self.max_request_body_bytes, VERCEL_MAX_REQUEST_BODY_BYTES)
+        return self.max_request_body_bytes
+
+    @property
+    def allowed_origins(self) -> list[str]:
+        """CODEWALK_CORS_ORIGINS plus, on Vercel, the deployment's own https:// URLs."""
+        origins = list(self.cors_origins)
+        if self.on_vercel:
+            for host in (self.vercel_url, self.vercel_branch_url, self.vercel_project_production_url):
+                if host and f"https://{host}" not in origins:
+                    origins.append(f"https://{host}")
+        return origins
 
     @property
     def ai_credential(self) -> SecretStr | None:
