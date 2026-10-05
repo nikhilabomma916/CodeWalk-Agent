@@ -192,9 +192,16 @@ problems, and the selection. The project itself is read on the server through th
   `Referrer-Policy`, `Permissions-Policy`, a `default-src 'none'` CSP and `Cache-Control:
   no-store` on API responses, and HSTS in production. Production startup fails on insecure settings
   (weak secret key, wildcard or `http://` origins, non-secure cookies).
-- **Rate limits** (per user or client, per window): sign-in, registration, AI requests, agent runs,
-  semantic queries, and indexing runs. They are **per process**: with several backend instances,
-  put them behind a shared store (the `AttemptLimiter` interface is the seam) or limit at a proxy.
+- **Rate limits** (per user or client, per window): sign-in (per address and email, and per account
+  from any address), registration, AI requests, agent runs, semantic queries, indexing runs and
+  GitHub imports. With a database they are **shared by every backend instance** through PostgreSQL
+  (`rate_limit_events`, hashed keys, advisory locks), which matters on serverless hosting; without
+  one, or if it is unreachable, they fall back to per-process counters.
+- **Names**: file paths and project names may not contain invisible or direction-changing Unicode
+  characters (bidi overrides, zero-width characters) or segments with leading/trailing spaces, so a
+  file cannot pose as another in the file tree, diffs or proposals.
+- **GitHub**: see [docs/integrations/github.md](docs/integrations/github.md) (OAuth state, encrypted
+  tokens, read-only scopes). Full audit: [docs/security/audit.md](docs/security/audit.md).
 - **Audit log**: security events go to the `app.security` logger as `security.<event>` lines with
   ids and codes only: failed logins (email as a short hash), rate limits, rejected origins,
   cross-user project access, denied agent tools, and proposed / applied / rejected / stale changes.

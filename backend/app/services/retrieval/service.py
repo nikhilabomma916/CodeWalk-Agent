@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.exceptions import AppError
 from app.core.metrics import timed
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import AttemptLimiter, RateLimiter
 from app.db.models import CodeChunk, Project, ProjectFile, User
 from app.schemas.retrieval import IndexRunResponse, IndexStatusResponse, RetrievalStatusResponse
 from app.services.languages import Language
@@ -102,8 +102,13 @@ class RetrievalService:
                 f"The embedding provider produces {self.provider.dimensions}-dimensional vectors; "
                 f"the database stores {EMBEDDING_DIMENSIONS}."
             )
-        self.query_limiter = AttemptLimiter(settings.rag_max_queries, settings.rag_window_seconds)
-        self.index_limiter = AttemptLimiter(settings.rag_max_index_runs, settings.rag_window_seconds)
+        # Replaced by shared (PostgreSQL) limiters in create_app when a database is configured.
+        self.query_limiter: RateLimiter = AttemptLimiter(
+            settings.rag_max_queries, settings.rag_window_seconds
+        )
+        self.index_limiter: RateLimiter = AttemptLimiter(
+            settings.rag_max_index_runs, settings.rag_window_seconds
+        )
         self._queries: OrderedDict[tuple[str, str], list[float]] = OrderedDict()
         self._lock = threading.Lock()
 

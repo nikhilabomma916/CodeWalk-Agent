@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.crypto import TokenCipher, TokenDecryptionError
 from app.core.exceptions import AppError, ConflictError
-from app.core.rate_limit import AttemptLimiter
+from app.core.rate_limit import RateLimiter
 from app.db.models import ActivityType, GitHubConnection, Project, ProjectSource, User
 from app.schemas.github import (
     GitHubBranchPage,
@@ -108,7 +108,7 @@ class GitHubService:
         settings: Settings,
         user: User,
         client: GitHubClient,
-        import_limiter: AttemptLimiter,
+        import_limiter: RateLimiter,
         files: FileService | None = None,
     ) -> None:
         self.session = session
