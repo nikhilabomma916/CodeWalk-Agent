@@ -160,14 +160,14 @@ Long requests: an agent run may take up to 240 s. On Vercel's Hobby plan the fun
 - PostgreSQL 17 with the `vector` extension (pgvector). The migration chain runs
   `CREATE EXTENSION IF NOT EXISTS vector`, so the migration role needs permission to create it, or
   enable it in the provider's console first.
-- Current head revision: `c5d2e8f1a9b3`.
+- Current head revision: `f3c7d1e9a2b4`.
 - Migrations never run when an instance starts. Run them as a separate step from a trusted machine
   or CI, against the **new production database only**:
 
   ```
   # in backend/, with CODEWALK_DATABASE_URL set for the production database in that shell only
   uv run alembic upgrade head
-  uv run alembic current    # expect c5d2e8f1a9b3 (head)
+  uv run alembic current    # expect f3c7d1e9a2b4 (head)
   ```
 
   Use the provider's direct (non-pooled) connection string for migrations if its pooler does not
@@ -178,26 +178,33 @@ Long requests: an agent run may take up to 240 s. On Vercel's Hobby plan the fun
 | Endpoint | Meaning |
 | --- | --- |
 | `GET /api/v1/health/live` | process is up (no dependencies) |
-| `GET /api/v1/health/ready` | ready to serve: includes the database check |
+| `GET /api/v1/health/ready` | ready to serve: database reachable **and** schema at the code's head (both required in production), plus TypeScript worker and provider configuration (optional) |
 | `GET /api/v1/health` | full health report |
 | `GET /healthz` | frontend service |
 
-Vercel does not run Docker `HEALTHCHECK`s; use these for smoke tests and uptime monitoring.
+Vercel does not run Docker `HEALTHCHECK`s; use these for smoke tests and uptime monitoring. A new
+release whose migration has not run reports `503` on readiness (`schema` check), so run migrations
+before promoting a deployment. See [operations](../operations/README.md#readiness).
 
-## In-memory state on serverless instances
+## State on serverless instances
 
-Login and registration rate limits, AI and agent limits, and the search index cache are kept per
-instance. Each new instance starts with empty counters, so the brute-force limits are weaker on
-Vercel. Before launch, add a Vercel Firewall rate-limit rule for `/api/v1/auth/*` and set spending
-limits with the AI provider. Persistent data (users, sessions, projects, files, analyses, embeddings)
-is in PostgreSQL.
+Rate limits (login, registration, AI, agent, semantic search, indexing, GitHub import) are shared
+through PostgreSQL (`rate_limit_events`), so every instance counts against the same window; only
+while the database is unreachable does an instance fall back to its own counters. The search index
+cache is per instance (rebuilt on demand). A Vercel Firewall rate-limit rule for `/api/v1/auth/*`
+is still recommended as an outer layer, and set spending limits with the AI provider. Persistent
+data (users, sessions, projects, files, analyses, embeddings, GitHub connections) is in PostgreSQL.
 
 ## Still requires external infrastructure or a real deployment
 
 - A Vercel project (Services and Container Images are beta), the environment variables above, and
   `PORT=8000`.
 - A managed PostgreSQL 17 database with pgvector, migrated to head as described above.
-- AI and embedding provider accounts with credit.
+- AI and embedding provider accounts with credit (the OpenAI account used in development reported
+  `insufficient_quota`, so live AI has not been exercised end to end).
+- For GitHub import: a GitHub OAuth app with callback `https://<domain>/api/v1/github/callback`,
+  and `CODEWALK_GITHUB_CLIENT_ID`/`_SECRET`/`_CALLBACK_URL`, `CODEWALK_APP_URL` and a generated
+  `CODEWALK_TOKEN_ENCRYPTION_KEY` set in the backend service ([github.md](../integrations/github.md)).
 - A custom domain (then `CODEWALK_CORS_ORIGINS=https://<domain>`) and a firewall rate-limit rule.
 - Confirming on a preview deployment: routing of `/api/v1/*`, `VERCEL_*` variables inside the
   container, the 4.5 MB limit, cold starts, and `SIGTERM` handling.
