@@ -19,7 +19,7 @@ MAX_DIAGNOSTICS = 50
 
 class AgentMode(StrEnum):
     """The workflow the developer chose (Module 17). Each adds instructions and favors certain tools;
-    the permissions and limits are the same for every mode."""
+    the limits are the same for every mode; READ_ONLY_MODES also deny every proposal tool."""
 
     ASSIST = "assist"  # answer, explain, and fix on request
     REVIEW = "review"  # project-aware code review with recorded findings
@@ -28,6 +28,43 @@ class AgentMode(StrEnum):
     REFACTOR = "refactor"  # impact analysis and a reviewable (possibly multi-file) change
     IMPACT = "impact"  # what may break if something changes
     ARCHITECTURE = "architecture"  # explain how the project is built
+    EXPLAIN = "explain"  # explain one topic of the project (explain_topic) at a depth; never proposes
+
+
+# Workflows that only answer: proposal tools are denied by the policy, not just discouraged by the prompt.
+READ_ONLY_MODES = frozenset({AgentMode.EXPLAIN})
+
+
+class ExplainTopic(StrEnum):
+    """What part of the project to explain (mode "explain")."""
+
+    OVERVIEW = "overview"
+    ARCHITECTURE = "architecture"
+    HOW_IT_WORKS = "how_it_works"
+    FILE_STRUCTURE = "file_structure"
+    MODULES = "modules"
+    DEPENDENCIES = "dependencies"
+    ENTRY_POINTS = "entry_points"
+    APIS = "apis"
+    DATABASE = "database"
+    DATA_FLOW = "data_flow"
+    AUTHENTICATION = "authentication"
+    SECURITY = "security"
+    AI_ML = "ai_ml"
+    CONFIGURATION = "configuration"
+    TESTING = "testing"
+    DEPLOYMENT = "deployment"
+    RISKS = "risks"
+    IMPROVEMENTS = "improvements"
+
+
+class ExplainDepth(StrEnum):
+    """How deep, and for whom, the explanation is written (mode "explain")."""
+
+    BEGINNER = "beginner"
+    DEVELOPER = "developer"
+    TECHNICAL = "technical"
+    DEEP_DIVE = "deep_dive"
 
 
 class SelectionRange(BaseModel):
@@ -84,6 +121,12 @@ class AgentRunRequest(BaseModel):
         max_length=MAX_HISTORY_TURNS,
         description="Earlier turns of this chat, oldest first (the client keeps the conversation).",
     )
+    explain_topic: ExplainTopic | None = Field(
+        default=None, description='Mode "explain" only: the topic (default overview).'
+    )
+    explain_depth: ExplainDepth | None = Field(
+        default=None, description='Mode "explain" only: the depth (default developer).'
+    )
 
     @model_validator(mode="after")
     def _file_context(self) -> AgentRunRequest:
@@ -91,6 +134,11 @@ class AgentRunRequest(BaseModel):
             raise ValueError("The message is empty.")
         if (self.code is not None or self.selection is not None) and self.file_path is None:
             raise ValueError("code and selection need file_path.")
+        if self.mode is AgentMode.EXPLAIN:
+            self.explain_topic = self.explain_topic or ExplainTopic.OVERVIEW
+            self.explain_depth = self.explain_depth or ExplainDepth.DEVELOPER
+        elif self.explain_topic is not None or self.explain_depth is not None:
+            raise ValueError('explain_topic and explain_depth need mode "explain".')
         return self
 
 

@@ -5,15 +5,17 @@ import { useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/ui/icon-button";
 import { AgentPanel } from "@/features/agent/agent-panel";
+import { ExplainProjectPanel } from "@/features/agent/explain-panel";
 import { AIReviewPanel } from "@/features/ai/ai-review-panel";
 import { FileHistoryPanel } from "@/features/history/file-history-panel";
 import { InsightsPanel } from "@/features/insights/insights-panel";
 import { IntelligencePanel } from "@/features/intelligence/intelligence-panel";
 
-type AssistantTab = "agent" | "review" | "history" | "insights" | "project";
-const TABS: AssistantTab[] = ["agent", "review", "history", "insights", "project"];
+type AssistantTab = "agent" | "explain" | "review" | "history" | "insights" | "project";
+const TABS: AssistantTab[] = ["agent", "explain", "review", "history", "insights", "project"];
 const TAB_LABEL: Record<AssistantTab, string> = {
   agent: "Agent",
+  explain: "Explain",
   review: "AI Review",
   history: "History",
   insights: "Insights",
@@ -49,7 +51,7 @@ export function RightSidebar({
   };
 
   const tabClass = (active: boolean) =>
-    `h-8 px-2 text-[11px] font-semibold tracking-wider uppercase ${
+    `h-8 shrink-0 px-2 text-[11px] font-semibold tracking-wider whitespace-nowrap uppercase ${
       active ? "text-fg shadow-[inset_0_-1px_0_var(--color-accent)]" : "text-fg-muted hover:text-fg"
     }`;
 
@@ -59,7 +61,7 @@ export function RightSidebar({
         <div
           role="tablist"
           aria-label="AI and project views"
-          className="flex"
+          className="flex min-w-0 [scrollbar-width:none] overflow-x-auto"
           onKeyDown={onKeyDown}
         >
           {TABS.map((id) => (
@@ -89,6 +91,8 @@ export function RightSidebar({
       >
         {tab === "agent" ? (
           <AgentPanel />
+        ) : tab === "explain" ? (
+          <ExplainProjectPanel />
         ) : tab === "review" ? (
           <AIReviewPanel />
         ) : tab === "history" ? (

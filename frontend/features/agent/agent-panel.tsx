@@ -44,7 +44,10 @@ const MODE_LABEL: Record<AgentMode, string> = {
   refactor: "Refactor (multi-file)",
   impact: "Impact analysis",
   architecture: "Explain architecture",
+  explain: "Explain the project",
 };
+// Explaining the project (topic + depth) has its own view: the Explain tab.
+const CHAT_MODES = AGENT_MODES.filter((m) => m !== "explain");
 
 /** "line 4" or "lines 4-6"; a selection that ends at column 1 does not include that last line. */
 function selectionLabel(sel: { startLine: number; endLine: number; endColumn: number }): string {
@@ -854,7 +857,7 @@ export function AgentPanel({ onClose }: { onClose?(): void } = {}) {
             disabled={disabled}
             className="min-w-0 rounded border border-border bg-surface px-1 py-0.5 text-[11px] text-fg disabled:opacity-60"
           >
-            {AGENT_MODES.map((m) => (
+            {CHAT_MODES.map((m) => (
               <option key={m} value={m}>
                 {MODE_LABEL[m]}
               </option>

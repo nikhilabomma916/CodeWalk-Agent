@@ -41,8 +41,11 @@ class ToolPolicy:
     calls: int = 0
     executed: set[str] = field(default_factory=set)
     consecutive_failures: int = 0
-    # The project accepts no proposals (an uploaded project): proposal tools are denied outright.
+    # No proposals in this run (an uploaded project, or a read-only workflow): proposal tools are denied.
     read_only: bool = False
+    read_only_reason: str = (
+        "This project was uploaded for analysis; answer the question without proposing changes."
+    )
 
     def resolve(self, name: str | None) -> ToolSpec:
         spec = TOOLS.get(name or "")
@@ -58,10 +61,7 @@ class ToolPolicy:
                 "tool_call_limit", f"At most {self.max_tool_calls} tool calls are allowed per request."
             )
         if spec.permission is ToolPermission.PROPOSED_CHANGE and self.read_only:
-            raise ToolDeniedError(
-                "read_only_project",
-                "This project was uploaded for analysis; answer the question without proposing changes.",
-            )
+            raise ToolDeniedError("read_only_project", self.read_only_reason)
         if spec.permission is ToolPermission.PROPOSED_CHANGE and self.actions >= self.max_actions:
             raise ToolDeniedError(
                 "proposal_limit", f"At most {self.max_actions} changes can be proposed in one request."

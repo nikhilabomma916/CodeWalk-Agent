@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.schemas.agent import AgentMode, AgentRunRequest
+from app.schemas.agent import READ_ONLY_MODES, AgentMode, AgentRunRequest, ExplainDepth, ExplainTopic
 from app.services import insights
 from app.services.agent import prompts
 from app.services.agent.policy import ToolDeniedError, ToolPolicy
@@ -176,6 +176,20 @@ def test_each_mode_has_guidance_and_the_policy_is_unchanged() -> None:
         text = prompts.system_prompt(mode)
         assert text.startswith(policy)
         assert f"MODE: {mode.value}." in text
+
+
+def test_every_explain_topic_and_depth_has_guidance() -> None:
+    policy = prompts.system_prompt(AgentMode.ASSIST).split("MODE:")[0]
+    for topic in ExplainTopic:
+        for depth in ExplainDepth:
+            text = prompts.system_prompt(AgentMode.EXPLAIN, topic, depth)
+            assert text.startswith(policy)
+            assert f"TOPIC: {topic.value}. Cover " in text
+            assert f"DEPTH: {depth.value}. Write for " in text
+    # Outside the explain workflow, a topic changes nothing.
+    assert prompts.system_prompt(AgentMode.ASSIST, ExplainTopic.DATABASE) == prompts.system_prompt()
+    assert AgentMode.EXPLAIN in READ_ONLY_MODES
+    assert AgentMode.ASSIST not in READ_ONLY_MODES
 
 
 def test_developer_notes_are_escaped_data() -> None:

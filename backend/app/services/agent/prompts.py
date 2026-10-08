@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from app.schemas.agent import AgentMode, AgentRunRequest
+from app.schemas.agent import AgentMode, AgentRunRequest, ExplainDepth, ExplainTopic
 from app.services.agent.tools import tool_catalog
 
 MAX_SELECTION_PROMPT_CHARS = 8000
@@ -127,14 +127,114 @@ MODE_GUIDANCE: dict[AgentMode, str] = {
         "question. Describe components, how requests flow, and where key concerns live, with file paths. "
         "Say what could not be determined. Do not propose changes."
     ),
+    AgentMode.EXPLAIN: (
+        "Explain ONE topic of the project (TOPIC below) for the reader described by DEPTH. Start with "
+        "get_architecture, then read the files that matter for the topic (search_project or "
+        "semantic_search_project to find them, get_file_content to read them). Ground every statement in "
+        "code you read and cite file paths (path:line where useful). If the project has nothing for the "
+        "topic (e.g. no database), say so plainly and name what you checked instead of describing a "
+        "generic project. Separate what the code shows from what you infer. Use short headings and lists. "
+        "Do not propose changes: this workflow cannot."
+    ),
+}
+
+# What each topic covers (mode "explain"); closed set, so only this text reaches the system prompt.
+EXPLAIN_TOPIC_GUIDANCE: dict[ExplainTopic, str] = {
+    ExplainTopic.OVERVIEW: (
+        "what the project is for, its main parts, languages and frameworks, and how to start reading it"
+    ),
+    ExplainTopic.ARCHITECTURE: (
+        "components and layers, how they depend on each other, and the main design decisions"
+    ),
+    ExplainTopic.HOW_IT_WORKS: (
+        "what happens end to end for the main use cases, step by step, naming the code involved"
+    ),
+    ExplainTopic.FILE_STRUCTURE: (
+        "the folder layout, what each top-level folder and key file is for, and naming conventions"
+    ),
+    ExplainTopic.MODULES: (
+        "each main module or package: its responsibility, public interface, and who uses it"
+    ),
+    ExplainTopic.DEPENDENCIES: (
+        "external libraries and services from the manifests (package.json, pyproject, requirements, ...), "
+        "what each is used for and where"
+    ),
+    ExplainTopic.ENTRY_POINTS: (
+        "how the program starts: main files, servers, CLIs, scripts, and what each initializes"
+    ),
+    ExplainTopic.APIS: (
+        "the HTTP or other API surface: routes, methods, request and response shapes, and the handlers' files"
+    ),
+    ExplainTopic.DATABASE: (
+        "storage: database engine, models or tables and their relations, migrations, and how the code "
+        "queries it"
+    ),
+    ExplainTopic.DATA_FLOW: (
+        "how data moves from input to storage to output, including transformations and validation"
+    ),
+    ExplainTopic.AUTHENTICATION: (
+        "how users sign in, how sessions or tokens work, and how access is checked, with the files"
+    ),
+    ExplainTopic.SECURITY: (
+        "security controls in the code (input validation, secrets handling, authorization, headers) and "
+        "visible gaps"
+    ),
+    ExplainTopic.AI_ML: (
+        "AI/ML usage: models, providers, prompts, embeddings or training code, and how results are used"
+    ),
+    ExplainTopic.CONFIGURATION: (
+        "settings files, environment variables, defaults, and what each controls (never print secret values)"
+    ),
+    ExplainTopic.TESTING: (
+        "the test setup: frameworks, where tests live, what is covered, and how to run them"
+    ),
+    ExplainTopic.DEPLOYMENT: (
+        "build and deployment: Dockerfiles, compose, CI workflows, hosting config, and the release steps "
+        "they imply"
+    ),
+    ExplainTopic.RISKS: (
+        "problems and risks visible in the code (bugs, fragile parts, missing error handling, security or "
+        "scaling concerns), each with its file and why it matters"
+    ),
+    ExplainTopic.IMPROVEMENTS: (
+        "concrete, prioritized improvement suggestions, each tied to the code it concerns and its benefit"
+    ),
+}
+
+EXPLAIN_DEPTH_GUIDANCE: dict[ExplainDepth, str] = {
+    ExplainDepth.BEGINNER: (
+        "a beginner: plain language, define terms, an analogy where it helps, short, few file paths"
+    ),
+    ExplainDepth.DEVELOPER: (
+        "a developer new to this project: practical and concise, the key files and how the parts connect"
+    ),
+    ExplainDepth.TECHNICAL: (
+        "an experienced engineer: precise, with file paths, function and class names, and trade-offs"
+    ),
+    ExplainDepth.DEEP_DIVE: (
+        "a maintainer: thorough, read more files, cover edge cases, control flow, and line references"
+    ),
 }
 
 
-def system_prompt(mode: AgentMode = AgentMode.ASSIST) -> str:
-    return (
+def system_prompt(
+    mode: AgentMode = AgentMode.ASSIST,
+    topic: ExplainTopic | None = None,
+    depth: ExplainDepth | None = None,
+) -> str:
+    text = (
         SYSTEM_TEMPLATE.format(catalog=json.dumps(tool_catalog(), indent=1))
         + f"\n\nMODE: {mode.value}. {MODE_GUIDANCE[mode]}"
     )
+    if mode is AgentMode.EXPLAIN:
+        # Both come from closed enums: only CodeWalk's own text enters the system prompt.
+        topic = topic or ExplainTopic.OVERVIEW
+        depth = depth or ExplainDepth.DEVELOPER
+        text += (
+            f"\nTOPIC: {topic.value}. Cover {EXPLAIN_TOPIC_GUIDANCE[topic]}."
+            f"\nDEPTH: {depth.value}. Write for {EXPLAIN_DEPTH_GUIDANCE[depth]}."
+        )
+    return text
 
 
 def _data(kind: str, body: str, **attributes: Any) -> str:

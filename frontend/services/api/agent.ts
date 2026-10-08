@@ -101,8 +101,40 @@ export const AGENT_MODES = [
   "refactor",
   "impact",
   "architecture",
+  "explain",
 ] as const;
 export type AgentMode = (typeof AGENT_MODES)[number];
+
+/** Topics of the project explanation (mode "explain"); the backend accepts exactly these. */
+export const EXPLAIN_TOPICS = [
+  { id: "overview", label: "Overview" },
+  { id: "architecture", label: "Architecture" },
+  { id: "how_it_works", label: "How It Works" },
+  { id: "file_structure", label: "File Structure" },
+  { id: "modules", label: "Modules" },
+  { id: "dependencies", label: "Dependencies" },
+  { id: "entry_points", label: "Entry Points" },
+  { id: "apis", label: "APIs" },
+  { id: "database", label: "Database" },
+  { id: "data_flow", label: "Data Flow" },
+  { id: "authentication", label: "Authentication" },
+  { id: "security", label: "Security" },
+  { id: "ai_ml", label: "AI/ML" },
+  { id: "configuration", label: "Configuration" },
+  { id: "testing", label: "Testing" },
+  { id: "deployment", label: "Deployment" },
+  { id: "risks", label: "Problems / Risks" },
+  { id: "improvements", label: "Improvement Suggestions" },
+] as const;
+export type ExplainTopic = (typeof EXPLAIN_TOPICS)[number]["id"];
+
+export const EXPLAIN_DEPTHS = [
+  { id: "beginner", label: "Beginner" },
+  { id: "developer", label: "Developer" },
+  { id: "technical", label: "Technical" },
+  { id: "deep_dive", label: "Deep Dive" },
+] as const;
+export type ExplainDepth = (typeof EXPLAIN_DEPTHS)[number]["id"];
 
 export const SEVERITIES = ["critical", "high", "medium", "low", "info"] as const;
 const findingSchema = z.object({
@@ -247,6 +279,9 @@ export interface AgentRunInput {
   mode?: AgentMode;
   /** Earlier turns of the same chat, oldest first (at most 8 are sent). */
   history?: ConversationTurn[];
+  /** Mode "explain" only: the topic and depth (the backend defaults to overview / developer). */
+  explainTopic?: ExplainTopic;
+  explainDepth?: ExplainDepth;
 }
 
 /** One earlier message of a chat: what the developer asked, or what the agent answered. */
@@ -283,6 +318,9 @@ export async function runAgent(
       diagnostics: (input.diagnostics ?? []).slice(0, 50).map(toBackendDiagnostic),
       mode: input.mode ?? "assist",
       history: (input.history ?? []).slice(-8),
+      ...(input.mode === "explain"
+        ? { explain_topic: input.explainTopic, explain_depth: input.explainDepth }
+        : {}),
     },
     schema: runSchema,
     timeoutMs: AGENT_RUN_TIMEOUT_MS,

@@ -17,6 +17,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { buttonClass, PageFrame } from "@/components/ui/page-frame";
 import { StateMessage } from "@/components/ui/state-message";
 import { ProjectAsk, type AskModeOption } from "@/features/agent/project-ask";
+import { ProjectExplain } from "@/features/agent/project-explain";
 import { codingHref } from "@/features/workspace/use-coding-deep-link";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import {
@@ -389,6 +390,19 @@ export function ProjectDetailPage({ projectId }: { projectId: string }) {
             projectId={project.id}
             modes={PROJECT_ASK_MODES}
             placeholder="e.g. What have we done in this project? How does authentication work?"
+            onOpen={(path, line) => router.push(codingHref(project.id, path, line))}
+          />
+        </section>
+
+        <section aria-labelledby="explain-title" className="rounded border border-border p-3">
+          <h3
+            id="explain-title"
+            className="mb-2 text-[11px] font-semibold tracking-wider text-fg-muted uppercase"
+          >
+            Project explanation
+          </h3>
+          <ProjectExplain
+            projectId={project.id}
             onOpen={(path, line) => router.push(codingHref(project.id, path, line))}
           />
         </section>

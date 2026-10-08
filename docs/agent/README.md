@@ -9,8 +9,8 @@ developer's explicit approval, re-validated at decision time.
 ## Workflows (`mode`)
 
 `POST /api/v1/agent/run` takes `mode` (default `assist`). The mode adds fixed guidance to the
-system prompt (written by CodeWalk, never taken from the project); permissions and limits are the
-same for every mode.
+system prompt (written by CodeWalk, never taken from the project); limits are the same for every
+mode, and the read-only modes (`explain`) also deny every proposal tool in the policy.
 
 | Mode | What the agent is told to do | Typical tools |
 | --- | --- | --- |
@@ -21,6 +21,15 @@ same for every mode.
 | `refactor` | Run impact analysis, read affected files, submit **one** multi-file proposal | analyze_impact, find_references, propose_changes |
 | `impact` | Explain what may break; separate confirmed from possible relationships | analyze_impact, find_related_tests |
 | `architecture` | Explain how the project is built, with file paths | get_architecture, get_file_content |
+| `explain` | Explain one topic of the project (`explain_topic`) for a reader level (`explain_depth`), grounded in files read, with paths; says when the project has nothing for the topic. Read-only | get_architecture, search_project, semantic_search_project, get_file_content |
+
+Mode `explain` takes `explain_topic` (`overview`, `architecture`, `how_it_works`, `file_structure`,
+`modules`, `dependencies`, `entry_points`, `apis`, `database`, `data_flow`, `authentication`,
+`security`, `ai_ml`, `configuration`, `testing`, `deployment`, `risks`, `improvements`; default
+`overview`) and `explain_depth` (`beginner`, `developer`, `technical`, `deep_dive`; default `developer`).
+Both are closed sets, so only CodeWalk's own text for them enters the system prompt; sending either
+with another mode is a 422. The UI is the Explain tab (Coding sidebar, Uploads) and the "Project
+explanation" section of a project page.
 
 ## Tools
 

@@ -41,6 +41,7 @@ from app.db.models import (
     User,
 )
 from app.schemas.agent import (
+    READ_ONLY_MODES,
     AgentActionOut,
     AgentContextInfo,
     AgentEvent,
@@ -258,6 +259,13 @@ class AgentService:
             max_tool_calls=self.settings.agent_max_tool_calls,
             read_only=read_only,
         )
+        if not read_only and request.mode in READ_ONLY_MODES:
+            # Explaining the project only answers; changes are proposed from another workflow.
+            policy.read_only = True
+            policy.max_actions = 0
+            policy.read_only_reason = (
+                f"The {request.mode.value} workflow only answers; explain without proposing changes."
+            )
         # The developer's saved notes for this project (ownership was checked above).
         memory = MemoryService(self.session, self.settings, self.owner).for_prompt(project.id)
         notes = [(m.kind.value, m.text) for m in memory]
@@ -280,7 +288,7 @@ class AgentService:
             events.append(AgentEvent(type=kind, message=message, at=_now(), tool=tool, data=extra))
 
         emit(AgentEventType.STARTED, "Agent started")
-        system = prompts.system_prompt(request.mode)
+        system = prompts.system_prompt(request.mode, request.explain_topic, request.explain_depth)
         max_steps = self.settings.agent_max_steps
         answer: str | None = None
         status = AgentRunStatus.COMPLETED

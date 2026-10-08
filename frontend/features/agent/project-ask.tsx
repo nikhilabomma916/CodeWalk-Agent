@@ -2,7 +2,7 @@
 
 import { Loader2 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 
 import { buttonClass } from "@/components/ui/page-frame";
 import { AiErrorNotice } from "@/features/ai/ai-common";
@@ -50,6 +50,31 @@ function Spinner({ text }: { text: string }) {
   );
 }
 
+/** Whether the agent can run (checked once on mount); `unavailable` holds the reason when it cannot. */
+export function useAgentAvailability(): { checking: boolean; unavailable: string | null } {
+  const [status, setStatus] = useState<Remote<AgentStatus>>({ state: "loading" });
+  useEffect(() => {
+    let cancelled = false;
+    getAgentStatus()
+      .then((data) => !cancelled && setStatus({ state: "ready", data }))
+      .catch(
+        (e) =>
+          !cancelled &&
+          setStatus({ state: "error", message: message(e, "Agent status unavailable.") }),
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const unavailable =
+    status.state === "ready" && !status.data.available
+      ? status.data.detail || "The agent is not available."
+      : status.state === "error"
+        ? status.message
+        : null;
+  return { checking: status.state === "loading", unavailable };
+}
+
 export function ProjectAsk({
   projectId,
   modes,
@@ -69,7 +94,7 @@ export function ProjectAsk({
   readOnly?: boolean;
   placeholder?: string;
 }) {
-  const [status, setStatus] = useState<Remote<AgentStatus>>({ state: "loading" });
+  const { checking, unavailable } = useAgentAvailability();
   const [mode, setMode] = useState<AgentMode>(modes[0]?.id ?? "assist");
   const [question, setQuestion] = useState("");
   const [useFile, setUseFile] = useState(true);
@@ -78,27 +103,8 @@ export function ProjectAsk({
   const modeId = useId();
   const questionId = useId();
 
-  useEffect(() => {
-    let cancelled = false;
-    getAgentStatus()
-      .then((data) => !cancelled && setStatus({ state: "ready", data }))
-      .catch(
-        (e) =>
-          !cancelled &&
-          setStatus({ state: "error", message: message(e, "Agent status unavailable.") }),
-      );
-    return () => {
-      cancelled = true;
-      abort.current?.abort();
-    };
-  }, []);
+  useEffect(() => () => abort.current?.abort(), []);
 
-  const unavailable =
-    status.state === "ready" && !status.data.available
-      ? status.data.detail || "The agent is not available."
-      : status.state === "error"
-        ? status.message
-        : null;
   const running = run.state === "loading";
 
   const ask = async (event: FormEvent) => {
@@ -134,7 +140,7 @@ export function ProjectAsk({
 
   return (
     <div className="space-y-3">
-      {status.state === "loading" && <Spinner text="Checking the agent…" />}
+      {checking && <Spinner text="Checking the agent…" />}
       {unavailable && (
         <p
           role="status"
@@ -221,7 +227,16 @@ export function ProjectAsk({
   );
 }
 
-export function AgentAnswer({ run, onOpen }: { run: AgentRun; onOpen?: OpenLocation }) {
+export function AgentAnswer({
+  run,
+  onOpen,
+  renderAnswer,
+}: {
+  run: AgentRun;
+  onOpen?: OpenLocation;
+  /** How the answer text is shown (plain text by default). */
+  renderAnswer?(text: string): ReactNode;
+}) {
   const files = run.context.files_inspected;
   const pending = run.actions.filter((a) => a.status === "pending");
   const location = (path: string, line: number, text: string) =>
@@ -239,7 +254,12 @@ export function AgentAnswer({ run, onOpen }: { run: AgentRun; onOpen?: OpenLocat
   return (
     <section aria-label="Agent answer" className="space-y-2 border-t border-border pt-2 text-xs">
       {run.error && <AiErrorNotice code={run.error.code} message={run.error.message} />}
-      {run.answer && <div className="whitespace-pre-wrap text-fg">{run.answer}</div>}
+      {run.answer &&
+        (renderAnswer ? (
+          renderAnswer(run.answer)
+        ) : (
+          <div className="whitespace-pre-wrap text-fg">{run.answer}</div>
+        ))}
       {run.findings.length > 0 && (
         <div>
           <h4 className="font-semibold text-fg-muted">Findings ({run.findings.length})</h4>

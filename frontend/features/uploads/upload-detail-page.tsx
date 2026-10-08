@@ -7,6 +7,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEven
 import { buttonClass, PageFrame } from "@/components/ui/page-frame";
 import { OpenInCodingButton } from "@/features/uploads/open-in-coding";
 import { ProjectAsk, type AskModeOption } from "@/features/agent/project-ask";
+import { ProjectExplain } from "@/features/agent/project-explain";
 import { StateMessage } from "@/components/ui/state-message";
 import {
   ArchitectureView,
@@ -44,6 +45,7 @@ function message(error: unknown, fallback: string): string {
 
 const TABS = [
   { id: "ask", label: "Ask" },
+  { id: "explain", label: "Explain" },
   { id: "overview", label: "Overview" },
   { id: "impact", label: "Impact" },
   { id: "search", label: "Search" },
@@ -493,6 +495,7 @@ export function UploadDetailPage({ projectId }: { projectId: string }) {
                 readOnly
               />
             )}
+            {tab === "explain" && <ProjectExplain projectId={data.id} onOpen={open} />}
             {tab === "overview" && <OverviewPanel project={data} analyzing={analyzing} />}
             {tab === "impact" && (
               <ImpactPanel projectId={data.id} selectedPath={selected} onOpen={open} />
