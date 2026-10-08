@@ -11,7 +11,8 @@ import { apiError, fakeBackend, json, requestsOf, type Route } from "@/testing/f
 import type { Diagnostic } from "@/types/diagnostics";
 
 import { AIReviewPanel } from "./ai-review-panel";
-import { FixReview } from "./fix-review";
+import { useAIAssist } from "./ai-assist-context";
+import { FixReview, FixStatusBanner } from "./fix-review";
 
 // The diff view is Monaco's DiffEditor, which needs a real browser; render its inputs instead.
 vi.mock("next/dynamic", () => ({
@@ -336,6 +337,44 @@ describe("Fix suggestion review", () => {
       await screen.findByText(/No useful fix suggestion\. The fix needs a change/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Review AI fix" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Fix requested from the editor (light bulb)", () => {
+  function RequestFix() {
+    const { requestFix } = useAIAssist();
+    return (
+      <button type="button" onClick={() => void requestFix(DIAGNOSTIC)}>
+        lightbulb-fix
+      </button>
+    );
+  }
+
+  it("shows why the fix failed over the editor, and can be dismissed", async () => {
+    renderWith(
+      [
+        ["GET", /^\/ai\/status$/, () => status(true)],
+        [
+          "POST",
+          /^\/ai\/fix-suggestion$/,
+          () =>
+            apiError(
+              502,
+              "ai_quota_exceeded",
+              "The AI provider account has no credit or quota left. Add credit or billing with the provider, then try again.",
+            ),
+        ],
+      ],
+      <>
+        <RequestFix />
+        <FixStatusBanner path="app.py" />
+      </>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "lightbulb-fix" }));
+    const banner = await screen.findByRole("region", { name: "AI fix status" });
+    await waitFor(() => expect(banner).toHaveTextContent("Reason: provider quota exceeded"));
+    await userEvent.click(within(banner).getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByRole("region", { name: "AI fix status" })).not.toBeInTheDocument();
   });
 });
 

@@ -24,8 +24,20 @@ const TAB_LABEL: Record<AssistantTab, string> = {
  * The Coding workspace's right sidebar: the AI agent (default) and the other AI/project views.
  * The bottom panel is kept for Problems.
  */
-export function RightSidebar({ onClose }: { onClose(): void }) {
+export function RightSidebar({
+  onClose,
+  focusAgent = 0,
+}: {
+  onClose(): void;
+  /** Changes when something asks to show the agent (the tab switches to Agent). */
+  focusAgent?: number;
+}) {
   const [tab, setTab] = useState<AssistantTab>("agent");
+  const [seenFocus, setSeenFocus] = useState(focusAgent);
+  if (focusAgent !== seenFocus) {
+    setSeenFocus(focusAgent);
+    setTab("agent");
+  }
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;

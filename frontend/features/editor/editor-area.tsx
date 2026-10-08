@@ -2,21 +2,25 @@
 
 import type { editor } from "monaco-editor";
 import dynamic from "next/dynamic";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { StateMessage } from "@/components/ui/state-message";
+import { useAgent } from "@/features/agent/agent-context";
 import { AgentReview } from "@/features/agent/agent-review";
 import { useAIAssist } from "@/features/ai/ai-assist-context";
-import { FixReview } from "@/features/ai/fix-review";
+import { FixReview, FixStatusBanner } from "@/features/ai/fix-review";
 import { useLiveAnalysis } from "@/features/analysis/use-live-analysis";
 import { isDirty } from "@/features/workspace/state";
+import { useWorkspaceLayout } from "@/features/workspace/layout-context";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage } from "@/lib/languages";
 import type { Diagnostic } from "@/types/diagnostics";
 
 import { useSetCursor, type SelectionInfo } from "./cursor-context";
+import { editorAIHandler, SELECTION_ACTIONS } from "./editor-ai-actions";
 import { EditorTabs } from "./editor-tabs";
 import { EditorToolbar } from "./editor-toolbar";
+import { pathFromModelUri } from "./monaco-setup";
 import { useMonacoStatus } from "./use-monaco-status";
 
 const MonacoEditor = dynamic(() => import("./monaco-editor"), {
@@ -30,8 +34,55 @@ export function EditorArea() {
     state;
   const setCursor = useSetCursor();
   const monacoStatus = useMonacoStatus();
-  const { status: aiStatus } = useAIAssist();
+  const { status: aiStatus, explain, requestFix } = useAIAssist();
   const aiAvailable = aiStatus.state === "ready" && aiStatus.data.available;
+  const agent = useAgent();
+  const layout = useWorkspaceLayout();
+
+  // AI actions started in the editor (light bulb on a problem, right-click on a selection).
+  const latestRef = useRef({ state, agent, layout, explain, requestFix });
+  useEffect(() => {
+    latestRef.current = { state, agent, layout, explain, requestFix };
+  });
+  useEffect(() => {
+    editorAIHandler.current = (request) => {
+      const current = latestRef.current;
+      if (request.kind === "diagnostic") {
+        const projectId = current.state.project?.id;
+        const path = projectId ? pathFromModelUri(projectId, request.uri) : null;
+        if (!path) return;
+        const diagnostic = Object.values(current.state.diagnostics)
+          .flatMap((byFile) => byFile[path] ?? [])
+          .find(
+            (d) =>
+              d.line === request.line &&
+              d.column === request.column &&
+              d.message === request.message,
+          );
+        if (!diagnostic) return;
+        if (request.action === "explain") {
+          current.layout.showProblems(); // the explanation opens next to the Problems list
+          void current.explain(diagnostic);
+        } else {
+          void current.requestFix(diagnostic); // reviewed in a diff over the editor
+        }
+        return;
+      }
+      const action = SELECTION_ACTIONS.find((a) => a.id === request.action);
+      if (!action) return;
+      current.layout.showAgent();
+      if (action.message)
+        void current.agent.ask(action.message, {
+          includeFile: true,
+          includeSelection: true,
+          mode: action.mode,
+        });
+      else if (action.draft) current.agent.setDraft(action.draft);
+    };
+    return () => {
+      editorAIHandler.current = null;
+    };
+  }, []);
   const [editorInstance, setEditorInstance] = useState<editor.IStandaloneCodeEditor | null>(null);
 
   const dirtyPaths = useMemo(
@@ -185,6 +236,7 @@ export function EditorArea() {
       <div className="relative min-h-0 flex-1">
         {body}
         {overlay && <div className="absolute inset-0 z-10 bg-surface">{overlay}</div>}
+        {ready && <FixStatusBanner path={activePath} />}
         {ready && <FixReview path={activePath} />}
         {ready && <AgentReview path={activePath} />}
       </div>

@@ -8,7 +8,7 @@ import { isDirty } from "@/features/workspace/state";
 import { useWorkspace } from "@/features/workspace/workspace-context";
 
 import { useAIAssist } from "./ai-assist-context";
-import { AdvisoryFooter, ConfidenceLabel, RemoteStatus } from "./ai-common";
+import { AdvisoryFooter, ConfidenceLabel, RemoteStatus, AiErrorNotice } from "./ai-common";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -131,11 +131,7 @@ export function ExplanationPanel() {
         </span>
       );
     if (fixResult.state === "error")
-      return (
-        <span role="alert" className="text-xs text-danger">
-          {fixResult.message}
-        </span>
-      );
+      return <AiErrorNotice code={fixResult.code} message={fixResult.message} />;
     if (fixResult.state !== "ready") return null;
     const data = fixResult.data;
     if (data.status === "no_suggestion")

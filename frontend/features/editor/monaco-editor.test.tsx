@@ -30,6 +30,8 @@ vi.mock("@monaco-editor/react", () => ({
       const timer = setTimeout(() => {
         const instance = {
           addCommand: () => undefined,
+          addAction: () => undefined,
+          trigger: () => undefined,
           getPosition: () => ({ lineNumber: 1, column: 1 }),
           getModel: () => null,
           getSelections: () => [],

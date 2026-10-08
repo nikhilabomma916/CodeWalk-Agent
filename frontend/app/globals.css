@@ -164,3 +164,17 @@
   background-color: var(--color-accent);
   background-image: none;
 }
+
+/*
+ * Monaco draws its context menu in a shadow root attached outside the editor, where the editor's
+ * theme variables are not defined (the menu was transparent). These inherit into the shadow root.
+ */
+.shadow-root-host {
+  --vscode-menu-background: var(--color-surface);
+  --vscode-menu-foreground: var(--color-fg);
+  --vscode-menu-selectionBackground: var(--color-accent-muted);
+  --vscode-menu-selectionForeground: var(--color-fg);
+  --vscode-menu-separatorBackground: var(--color-border);
+  --vscode-menu-border: var(--color-border);
+  --vscode-widget-shadow: rgb(0 0 0 / 0.35);
+}

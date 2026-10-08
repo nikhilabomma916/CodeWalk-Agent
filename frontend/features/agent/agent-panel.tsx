@@ -675,7 +675,7 @@ function SaveToServerPrompt() {
 
 /** The project-aware agent: the right sidebar of the Coding workspace (chat, context, actions). */
 export function AgentPanel({ onClose }: { onClose?(): void } = {}) {
-  const { status, run, history, newChat, ask, cancel, selection } = useAgent();
+  const { status, run, history, newChat, ask, cancel, selection, draft } = useAgent();
   const { state } = useWorkspace();
   const [message, setMessage] = useState("");
   const [includeFile, setIncludeFile] = useState(true);
@@ -684,6 +684,16 @@ export function AgentPanel({ onClose }: { onClose?(): void } = {}) {
   const inputId = useId();
   const modeId = useId();
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // A draft from the editor (e.g. "Convert the selected code to "): fill the input to complete.
+  const [shownDraft, setShownDraft] = useState(draft?.nonce);
+  if (draft && draft.nonce !== shownDraft) {
+    setShownDraft(draft.nonce);
+    setMessage(draft.text);
+  }
+  useEffect(() => {
+    if (draft) inputRef.current?.focus();
+  }, [draft]);
   const unavailable =
     status.state === "error"
       ? status.message
@@ -818,6 +828,7 @@ export function AgentPanel({ onClose }: { onClose?(): void } = {}) {
           Ask about your project
         </label>
         <textarea
+          ref={inputRef}
           id={inputId}
           value={message}
           onChange={(e) => setMessage(e.target.value)}

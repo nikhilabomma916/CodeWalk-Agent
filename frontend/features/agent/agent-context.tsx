@@ -71,6 +71,9 @@ interface AgentValue {
   closeReview(): void;
   /** The selection the next request would include (null when none). */
   selection: SelectionInfo | null;
+  /** Text to put in the chat input for the developer to complete (e.g. "Convert … to "). */
+  draft: { text: string; nonce: number } | null;
+  setDraft(text: string): void;
 }
 
 const AgentContext = createContext<AgentValue | null>(null);
@@ -117,6 +120,11 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   }, [run, history]);
   const [decisions, setDecisions] = useState<Record<string, DecisionState>>({});
   const [reviewing, setReviewing] = useState<AgentAction | null>(null);
+  const [draft, setDraftState] = useState<{ text: string; nonce: number } | null>(null);
+  const setDraft = useCallback(
+    (text: string) => setDraftState((current) => ({ text, nonce: (current?.nonce ?? 0) + 1 })),
+    [],
+  );
   const stateRef = useRef(state);
   const controller = useRef<AbortController | null>(null);
   const token = useRef(0);
@@ -334,6 +342,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       openReview,
       closeReview: () => setReviewing(null),
       selection,
+      draft,
+      setDraft,
     }),
     [
       ask,
@@ -350,6 +360,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       run,
       selection,
       status,
+      draft,
+      setDraft,
     ],
   );
 

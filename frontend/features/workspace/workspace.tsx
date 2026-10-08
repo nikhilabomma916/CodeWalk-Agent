@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 
 import { ConfirmProvider } from "@/components/ui/confirm-dialog";
@@ -16,6 +16,7 @@ import { createProject } from "@/services/api/projects";
 import { AppHeader } from "./app-header";
 import { BottomPanel } from "./bottom-panel";
 import { NewProjectDialog, type NewProjectRequest } from "./new-project-dialog";
+import { WorkspaceLayoutContext, type WorkspaceLayout } from "./layout-context";
 import { RightSidebar } from "./right-sidebar";
 import { Sidebar, type SidebarView } from "./sidebar";
 import { serverAvailability, useServerProjects } from "./use-server-projects";
@@ -127,6 +128,18 @@ export function CodingWorkspace() {
     else panel.collapse();
   }, [assistantRef]);
 
+  const [focusAgent, setFocusAgent] = useState(0);
+  const layout = useMemo<WorkspaceLayout>(
+    () => ({
+      showProblems: () => problemsRef.current?.expand(),
+      showAgent: () => {
+        assistantRef.current?.expand();
+        setFocusAgent((n) => n + 1);
+      },
+    }),
+    [assistantRef, problemsRef],
+  );
+
   const toggleProblems = useCallback(() => {
     const panel = problemsRef.current;
     if (!panel) return;
@@ -184,70 +197,74 @@ export function CodingWorkspace() {
         onOpenFolder={openFolder}
       />
 
-      <main className="min-h-0 flex-1">
-        {hasProject ? (
-          <Group orientation="horizontal" className="h-full">
-            <Panel
-              id="explorer"
-              panelRef={sidebarRef}
-              collapsible
-              defaultSize="20%"
-              minSize={170}
-              maxSize="45%"
-              onResize={(size) => setSidebarOpen(size.inPixels > 0)}
-            >
-              <Sidebar
-                view={sidebarView}
-                onViewChange={(view) => {
-                  setSidebarView(view);
-                  if (view === "search") setSearchFocus((n) => n + 1);
-                }}
-                searchFocus={searchFocus}
-                projectKey={state.project?.id}
-              />
-            </Panel>
-            <Separator />
-            <Panel id="main" minSize={240}>
-              <Group orientation="vertical" className="h-full">
-                <Panel id="editor" minSize={120}>
-                  <EditorArea />
-                </Panel>
-                <Separator />
-                <Panel
-                  id="problems"
-                  panelRef={problemsRef}
-                  collapsible
-                  defaultSize="24%"
-                  minSize={72}
-                  maxSize="70%"
-                  onResize={(size) => setProblemsOpen(size.inPixels > 0)}
-                >
-                  {problemsOpen && <BottomPanel onClose={toggleProblems} />}
-                </Panel>
-              </Group>
-            </Panel>
-            <Separator />
-            <Panel
-              id="assistant"
-              panelRef={assistantRef}
-              collapsible
-              defaultSize="28%"
-              minSize={280}
-              maxSize="55%"
-              onResize={(size) => setAssistantOpen(size.inPixels > 0)}
-            >
-              {assistantOpen && <RightSidebar onClose={toggleAssistant} />}
-            </Panel>
-          </Group>
-        ) : (
-          <Welcome
-            onNewProject={() => setNewProjectOpen(true)}
-            onOpenFolder={openFolder}
-            serverProjects={serverProjects}
-            onRefreshServerProjects={() => void refreshServerProjects()}
-          />
-        )}
-      </main>
+      <WorkspaceLayoutContext.Provider value={layout}>
+        <main className="min-h-0 flex-1">
+          {hasProject ? (
+            <Group orientation="horizontal" className="h-full">
+              <Panel
+                id="explorer"
+                panelRef={sidebarRef}
+                collapsible
+                defaultSize="20%"
+                minSize={170}
+                maxSize="45%"
+                onResize={(size) => setSidebarOpen(size.inPixels > 0)}
+              >
+                <Sidebar
+                  view={sidebarView}
+                  onViewChange={(view) => {
+                    setSidebarView(view);
+                    if (view === "search") setSearchFocus((n) => n + 1);
+                  }}
+                  searchFocus={searchFocus}
+                  projectKey={state.project?.id}
+                />
+              </Panel>
+              <Separator />
+              <Panel id="main" minSize={240}>
+                <Group orientation="vertical" className="h-full">
+                  <Panel id="editor" minSize={120}>
+                    <EditorArea />
+                  </Panel>
+                  <Separator />
+                  <Panel
+                    id="problems"
+                    panelRef={problemsRef}
+                    collapsible
+                    defaultSize="24%"
+                    minSize={72}
+                    maxSize="70%"
+                    onResize={(size) => setProblemsOpen(size.inPixels > 0)}
+                  >
+                    {problemsOpen && <BottomPanel onClose={toggleProblems} />}
+                  </Panel>
+                </Group>
+              </Panel>
+              <Separator />
+              <Panel
+                id="assistant"
+                panelRef={assistantRef}
+                collapsible
+                defaultSize="28%"
+                minSize={280}
+                maxSize="55%"
+                onResize={(size) => setAssistantOpen(size.inPixels > 0)}
+              >
+                {assistantOpen && (
+                  <RightSidebar onClose={toggleAssistant} focusAgent={focusAgent} />
+                )}
+              </Panel>
+            </Group>
+          ) : (
+            <Welcome
+              onNewProject={() => setNewProjectOpen(true)}
+              onOpenFolder={openFolder}
+              serverProjects={serverProjects}
+              onRefreshServerProjects={() => void refreshServerProjects()}
+            />
+          )}
+        </main>
+      </WorkspaceLayoutContext.Provider>
 
       <StatusBar
         connection={connection}

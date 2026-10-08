@@ -20,6 +20,7 @@ import {
   type Monaco,
   pathFromModelUri,
 } from "./monaco-setup";
+import { addSelectionActions, editorAIHandler } from "./editor-ai-actions";
 import { inlineCompletionConfig } from "./inline-completion-provider";
 
 export interface MonacoEditorProps {
@@ -86,6 +87,8 @@ export default function MonacoEditor(props: MonacoEditorProps) {
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       latest.current.onSave(latest.current.path);
     });
+    // Right-click on selected code: AI actions (sent to the agent).
+    addSelectionActions(instance, (request) => editorAIHandler.current?.(request));
     // Ctrl+Space: ask for an AI suggestion now (ghost text) as well as the usual suggestion list.
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => {
       if (latest.current.aiCompletions)

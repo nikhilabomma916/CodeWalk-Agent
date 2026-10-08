@@ -11,7 +11,7 @@ import { useWorkspace } from "@/features/workspace/workspace-context";
 import { detectLanguage } from "@/lib/languages";
 
 import { useAIAssist } from "./ai-assist-context";
-import { ConfidenceLabel } from "./ai-common";
+import { AiErrorNotice, ConfidenceLabel } from "./ai-common";
 
 const DiffEditor = dynamic(() => import("@monaco-editor/react").then((m) => m.DiffEditor), {
   ssr: false,
@@ -81,6 +81,54 @@ export function ReviewDiff({
  * versus suggested code (right). Nothing changes until "Apply fix" is chosen,
  * and only if the file still matches the code the suggestion was made for.
  */
+/**
+ * Progress or failure of a fix requested from the editor (light bulb), shown over the editor when the
+ * explanation panel is not already showing it. A suggestion opens the review below instead.
+ */
+export function FixStatusBanner({ path }: { path: string }) {
+  const { fix, explanation } = useAIAssist();
+  const [dismissed, setDismissed] = useState<object | null>(null);
+  if (!fix || fix.path !== path || dismissed === fix.result) return null;
+  const shownInExplanation =
+    explanation && fix.diagnostic && explanation.diagnostic.id === fix.diagnostic.id;
+  if (shownInExplanation) return null;
+  const result = fix.result;
+  let body: React.ReactNode = null;
+  if (result.state === "loading")
+    body = (
+      <p role="status" className="text-xs text-fg-muted">
+        Preparing a fix suggestion{fix.diagnostic ? ` for “${fix.diagnostic.message}”` : ""}…
+      </p>
+    );
+  else if (result.state === "error")
+    body = <AiErrorNotice code={result.code} message={result.message} />;
+  else if (result.state === "ready" && result.data.status === "no_suggestion")
+    body = (
+      <p className="text-xs text-fg-muted">
+        No useful fix suggestion. {result.data.warnings.at(-1) ?? ""}
+      </p>
+    );
+  if (!body) return null;
+  return (
+    <div
+      role="region"
+      aria-label="AI fix status"
+      className="absolute inset-x-2 top-2 z-10 flex items-start gap-2 rounded border border-border bg-surface p-2 shadow-lg"
+    >
+      <div className="min-w-0 flex-1">{body}</div>
+      {result.state !== "loading" && (
+        <button
+          type="button"
+          onClick={() => setDismissed(result)}
+          className="rounded px-1.5 py-0.5 text-[11px] text-fg-muted hover:bg-surface-hover hover:text-fg"
+        >
+          Dismiss
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function FixReview({ path }: { path: string }) {
   const { fix, applyFix, rejectFix, closeReview } = useAIAssist();
   const { state } = useWorkspace();

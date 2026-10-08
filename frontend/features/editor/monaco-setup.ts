@@ -31,6 +31,7 @@ export const ANALYSIS_MARKER_OWNER = "codewalk-analysis";
 export const MONO_FONT_STACK =
   'ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace';
 
+import { registerEditorAICodeActions } from "./editor-ai-actions";
 import { registerInlineCompletions } from "./inline-completion-provider";
 
 let configured = false;
@@ -40,6 +41,7 @@ export function configureMonaco(monaco: Monaco): void {
   if (configured) return;
   configured = true;
   registerInlineCompletions(monaco);
+  registerEditorAICodeActions(monaco);
 
   // Editor colours mirror the app tokens in globals.css (Monaco cannot read CSS variables).
   monaco.editor.defineTheme(MONACO_THEMES.dark, {
